@@ -1,0 +1,44 @@
+<script setup lang="ts">
+const config = useRuntimeConfig()
+const api = config.public.apiBase
+const { data: stats, refresh } = await useFetch<any>(`${api}/api/dashboard`, { default: () => ({ campaigns: 0, content_drafts: 0, confirmed_commission: 0, currency: 'USD' }) })
+const { data: campaigns, refresh: refreshCampaigns } = await useFetch<any[]>(`${api}/api/campaigns`, { default: () => [] })
+const { data: opportunities, refresh: refreshOpportunities } = await useFetch<any[]>(`${api}/api/research/opportunities`, { default: () => [] })
+const { data: networks } = await useFetch<any[]>(`${api}/api/research/networks`, { default: () => [] })
+const productName = ref(''), vendor = ref(''), commission = ref(20), recurring = ref(false), evidence = ref(3)
+const researchBusy = ref(false), researchError = ref('')
+async function addOpportunity() {
+  if (productName.value.trim().length < 2) return
+  researchBusy.value = true; researchError.value = ''
+  try {
+    await $fetch(`${api}/api/research/opportunities`, { method: 'POST', body: { product_name: productName.value, vendor_name: vendor.value, category: 'software', network: 'PartnerStack / direct', target_regions: 'US,UK,EU', commission_pct: commission.value, recurring: recurring.value, evidence_quality: evidence.value, audience_fit: 4, differentiation: 'Solves a specific recurring workflow problem for small businesses and creators.' } })
+    productName.value = ''; vendor.value = ''; await refreshOpportunities()
+  } catch (e: any) { researchError.value = e?.data?.detail || 'Could not save opportunity' }
+  finally { researchBusy.value = false }
+}
+async function analyzeOpportunity(id: number) { await $fetch(`${api}/api/research/opportunities/${id}/analyze`, { method: 'POST' }); await refreshOpportunities() }
+const name = ref(''), niche = ref('technology'), busy = ref(false), error = ref('')
+async function createCampaign() {
+  if (name.value.trim().length < 2) return
+  busy.value = true; error.value = ''
+  try {
+    await $fetch(`${api}/api/campaigns`, { method: 'POST', body: { name: name.value, niche: niche.value, network: 'unselected' } })
+    name.value = ''; await Promise.all([refresh(), refreshCampaigns()])
+  } catch (e: any) { error.value = e?.data?.detail || 'Could not create campaign' }
+  finally { busy.value = false }
+}
+</script>
+<template>
+  <main class="shell">
+    <header><div><p class="eyebrow">AUTONOMOUS BUSINESS / MVP 0.2</p><h1>Affiliate Command Center</h1><p class="muted">Research → Content → Approval → Conversion</p></div><span class="live">● SYSTEM ONLINE</span></header>
+    <section class="metrics"><article><small>CAMPAIGNS</small><strong>{{ stats.campaigns }}</strong></article><article><small>CONTENT DRAFTS</small><strong>{{ stats.content_drafts }}</strong></article><article><small>CONFIRMED COMMISSION</small><strong>${{ Number(stats.confirmed_commission || 0).toFixed(2) }}</strong><em>Only confirmed conversions</em></article></section>
+    <section class="panel"><h2>Create a campaign</h2><p class="muted">Start with one niche and validate demand before scaling.</p><form @submit.prevent="createCampaign"><input v-model="name" placeholder="Campaign name" required minlength="2"><select v-model="niche"><option value="technology">Technology</option><option value="home">Home & living</option><option value="fashion">Fashion</option><option value="software">Software / SaaS</option><option value="other">Other</option></select><button :disabled="busy">{{ busy ? 'Creating…' : 'Create campaign' }}</button></form><p v-if="error" class="error">{{ error }}</p></section>
+    <section class="panel"><div class="panel-head"><h2>Campaign pipeline</h2><span class="muted">{{ campaigns.length }} total</span></div><div v-if="!campaigns.length" class="empty">No campaigns yet. Create the first campaign above.</div><div v-for="c in campaigns" :key="c.id" class="campaign"><div><b>{{ c.name }}</b><small>{{ c.niche }} · {{ c.network }}</small></div><span class="tag">{{ c.status }}</span></div></section>
+    <section class="panel"><h2>AI Research Agent · Opportunity intake</h2><p class="muted">Add a candidate program using facts verified from its official page. The score prioritizes research; it is not a revenue forecast.</p><form @submit.prevent="addOpportunity"><input v-model="productName" placeholder="Product / SaaS name" required minlength="2"><input v-model="vendor" placeholder="Vendor name"><input v-model.number="commission" type="number" min="0" max="100" step="0.5" aria-label="Commission percent"><label class="check"><input v-model="recurring" type="checkbox"> Recurring</label><button :disabled="researchBusy">{{ researchBusy ? 'Saving…' : 'Score opportunity' }}</button></form><p v-if="researchError" class="error">{{ researchError }}</p><div v-for="o in opportunities" :key="o.id" class="campaign"><div><b>{{ o.product_name }}</b><small>{{ o.vendor_name || 'Vendor not specified' }} · {{ o.network }} · {{ o.commission_pct }}% {{ o.recurring ? 'recurring' : 'one-time' }}</small><small v-if="o.ai_brief" class="brief">{{ o.ai_brief }}</small></div><div class="score"><b>{{ o.score }}/100</b><small>{{ o.recommendation.replaceAll('_',' ') }}</small><button class="mini" @click="analyzeOpportunity(o.id)">Analyze</button></div></div><div v-if="!opportunities.length" class="empty">No opportunities yet. Add a product or SaaS program to begin.</div></section>
+    <section class="panel"><h2>Affiliate network shortlist</h2><div v-for="n in networks" :key="n.name" class="campaign"><div><b>{{ n.name }}</b><small>{{ n.best_for }} · {{ n.cost }}</small></div><a :href="n.url" target="_blank" rel="noopener">Official site ↗</a></div></section>
+    <footer>Human approval is required before publishing, outreach, or spending. No revenue is assumed.</footer>
+  </main>
+</template>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui;background:#07111f;color:#e8f2ff}*{box-sizing:border-box}body{margin:0}.shell{max-width:1120px;margin:0 auto;padding:42px 24px}header,.panel-head{display:flex;justify-content:space-between;align-items:center;gap:18px}h1{font-size:clamp(30px,5vw,48px);margin:6px 0}.eyebrow{color:#45e4d0;letter-spacing:.16em;font-size:11px}.muted,small,footer{color:#8da5bd}.live,.tag{color:#45e4d0;border:1px solid #1c716f;padding:8px 12px;border-radius:30px;font-size:11px}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:30px 0}.metrics article,.panel{background:#101e31;border:1px solid #203a54;border-radius:16px;padding:22px}.metrics small{display:block;letter-spacing:.12em}.metrics strong{display:block;font-size:32px;margin:12px 0}.metrics em{font-size:11px;color:#8da5bd;font-style:normal}.panel{margin:16px 0}.panel h2{margin:0 0 8px}form{display:flex;gap:10px;margin-top:18px}input,select{background:#081525;border:1px solid #29435e;border-radius:9px;color:#fff;padding:12px;min-width:0}input{flex:1}button{background:#16b8a6;color:#04151b;font-weight:700;border:0;border-radius:9px;padding:0 18px;cursor:pointer}button:disabled{opacity:.5}.campaign{display:flex;justify-content:space-between;align-items:center;padding:16px 0;border-bottom:1px solid #20354b}.campaign small{display:block;margin-top:5px}.campaign .brief{max-width:760px;white-space:pre-wrap;line-height:1.5;color:#c0d2e5}.score{text-align:right;min-width:120px}.score b{color:#45e4d0}.mini{display:block;margin:6px 0 0 auto;padding:6px 10px;font-size:11px}.check{display:flex;align-items:center;gap:6px;color:#9bb0c6;font-size:12px}a{color:#45e4d0;font-size:12px}.empty{padding:28px;color:#8da5bd;text-align:center}.error{color:#ff9d9d}footer{font-size:12px;margin-top:28px}@media(max-width:650px){.metrics{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}form{flex-direction:column}button{padding:13px}}
+</style>
