@@ -34,3 +34,15 @@ jobs:
             -X POST "${AUTOPILOT_API_URL}/api/autopilot/scheduled" \
             -H "X-Autopilot-Token: ${AUTOPILOT_TOKEN}" \
             -H "Content-Type: application/json"
+      - name: Publish next eligible post to Threads
+        env:
+          AUTOPILOT_API_URL: https://affiliate-backend-yfy6.onrender.com
+          AUTOPILOT_TOKEN: ${{ secrets.AUTOPILOT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            --retry 3 --retry-all-errors --retry-delay 20 --max-time 180 \
+            -X POST "${AUTOPILOT_API_URL}/api/autopilot/publish-threads" \
+            -H "X-Autopilot-Token: ${AUTOPILOT_TOKEN}" \
+            -H "Content-Type: application/json"
