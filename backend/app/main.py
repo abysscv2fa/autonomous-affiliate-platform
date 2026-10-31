@@ -321,6 +321,61 @@ def generate_media(payload: GenerateImageRequest, db: Session = Depends(get_db))
         raise HTTPException(502, "Không thể tạo ảnh AI. Kiểm tra API key, quyền truy cập model và hạn mức tài khoản.") from exc
 
 
+@app.post("/api/autopilot/publish-latest-image")
+def publish_latest_image_now(db: Session = Depends(get_db)):
+    """Create a post from the newest Cloudinary asset and publish it to the configured Facebook Page."""
+    from .direct_social import publish_facebook, SocialPublishError
+
+    if not settings.facebook_page_id or not settings.facebook_page_access_token:
+        raise HTTPException(503, "Facebook Page chưa được kết nối. Kiểm tra FACEBOOK_PAGE_ID và FACEBOOK_PAGE_ACCESS_TOKEN trên Render.")
+
+    asset = db.scalar(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1))
+    if not asset:
+        raise HTTPException(404, "Thư viện Cloudinary chưa có ảnh. Hãy tải ảnh lên trước.")
+
+    # Prevent accidental duplicate publishing of the same image by this one-click workflow.
+    already_published = db.scalar(
+        select(ActivityLog).where(
+            ActivityLog.event_type == "publishing.latest_image",
+            ActivityLog.details.like(f'%"{asset.public_id}"%')
+        ).limit(1)
+    )
+    if already_published:
+        raise HTTPException(409, "Ảnh mới nhất này đã được đăng bằng tính năng tự động chọn ảnh. Không đăng lặp.")
+
+    campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
+    if not campaign:
+        campaign = Campaign(name="Chiu Chiu · Social content", niche="technology", network="facebook")
+        db.add(campaign)
+        db.flush()
+
+    title = f"Không gian làm việc gọn gàng hơn · {asset.filename or asset.public_id}"
+    body = (
+        "Một góc làm việc với hai màn hình có thể giúp bạn sắp xếp nhiều tác vụ rõ ràng hơn: "
+        "một màn hình để tập trung xử lý công việc, màn hình còn lại để theo dõi tài liệu và trao đổi.\n\n"
+        "Điều quan trọng không phải là có thật nhiều thiết bị, mà là thiết lập phù hợp với cách bạn làm việc. "
+        "Bạn thích dùng một màn hình lớn hay hai màn hình song song?\n\n"
+        "#WorkSetup #DeskSetup #Productivity"
+    )
+    draft = ContentDraft(campaign_id=campaign.id, title=title[:240], body=body, image_url=asset.secure_url, status="draft")
+    db.add(draft)
+    db.flush()
+
+    try:
+        result = publish_facebook(body, asset.secure_url)
+    except SocialPublishError as exc:
+        log_activity(db, "publishing.failed", f"Đăng ảnh Cloudinary lên Facebook thất bại", "failed",
+                     {"draft_id": draft.id, "public_id": asset.public_id, "error": str(exc)[:500]})
+        db.commit()
+        raise HTTPException(502, f"Facebook từ chối đăng bài: {str(exc)[:500]}") from exc
+
+    draft.status = "published"
+    log_activity(db, "publishing.latest_image", "Đã tự chọn ảnh Cloudinary mới nhất và đăng lên Facebook",
+                 details={"draft_id": draft.id, "public_id": asset.public_id, "image_url": asset.secure_url, **result})
+    db.commit()
+    return {"status": "published", "draft_id": draft.id, "title": draft.title, "image_url": asset.secure_url, "platform": "facebook", "post_id": result["post_id"]}
+
+
 ALLOWED_METRICOOL_NETWORKS = {"facebook", "instagram", "threads", "pinterest", "tiktok"}
 def metricool_request(method: str, path: str, payload: dict | None = None):
     if not settings.metricool_user_token:
