@@ -232,12 +232,30 @@ def run_and_publish_facebook(db: Session = Depends(get_db)):
             "publishing": "skipped_no_eligible_draft",
             "message": "Không còn bản nháp Autopilot nào chưa đăng. Hãy tạo nội dung mới trước.",
         }
+
+    # Reuse an existing Cloudinary library image when the selected draft has
+    # no image. This keeps the generated copy and its image in one Facebook post.
+    selected_media_asset = None
+    if not draft.image_url:
+        selected_media_asset = db.scalar(
+            select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1)
+        )
+        if not selected_media_asset:
+            return {
+                **result,
+                "publishing": "skipped_no_image",
+                "draft_id": draft.id,
+                "title": draft.title,
+                "message": "Bản nháp chưa có ảnh và Image library Cloudinary đang trống. Hãy thêm ảnh rồi thử lại.",
+            }
+        draft.image_url = selected_media_asset.secure_url
+
     try:
         published = publish_facebook(draft.body, draft.image_url)
         draft.status = "published"
         log_activity(db, "publishing.autopilot", f"Autopilot tự động đăng bài #{draft.id} lên Facebook", details={"draft_id": draft.id, **published})
         db.commit()
-        return {**result, "publishing": "published", "published": published, "draft_id": draft.id, "title": draft.title, "selected_existing_draft": selected_existing_draft}
+        return {**result, "publishing": "published", "published": published, "draft_id": draft.id, "title": draft.title, "selected_existing_draft": selected_existing_draft, "image_url": draft.image_url, "image_source": "cloudinary_library" if selected_media_asset else ("draft" if draft.image_url else "none")}
     except SocialPublishError as exc:
         log_activity(db, "publishing.autopilot_failed", f"Autopilot đăng Facebook bài #{draft.id} thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
         db.commit()
