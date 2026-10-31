@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"
+    openai_image_model: str = "gpt-image-1"
+    openai_image_quality: str = "low"
     autopilot_token: str = ""
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
