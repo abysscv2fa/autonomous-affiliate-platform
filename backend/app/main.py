@@ -393,6 +393,30 @@ def generate_media(payload: GenerateImageRequest, db: Session = Depends(get_db))
 def publish_latest_image_disabled():
     """Publishing a library image without draft review is intentionally disabled."""
     raise HTTPException(410, "Không hỗ trợ tự đăng ảnh. Hãy gắn ảnh vào bản nháp, duyệt rồi đăng thủ công.")
+ALLOWED_METRICOOL_NETWORKS = {"facebook", "instagram", "threads", "pinterest", "tiktok"}
+def metricool_request(method: str, path: str, payload: dict | None = None):
+    if not settings.metricool_user_token:
+        raise HTTPException(503, "Thiếu METRICOOL_USER_TOKEN. Hãy thêm API token trong Render Environment.")
+    query = urlencode({"userId": settings.metricool_user_id, "blogId": settings.metricool_blog_id})
+    url = f"https://app.metricool.com/api{path}?{query}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = Request(url, data=data, method=method, headers={"X-Mc-Auth": settings.metricool_user_token, "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urlopen(req, timeout=25) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {"ok": True}
+    except Exception as exc:
+        detail = getattr(exc, "read", lambda: b"")()
+        message = detail.decode("utf-8", "ignore")[:500] if detail else str(exc)[:300]
+        raise HTTPException(502, f"Metricool API error: {message}") from exc
+
+
+class AgentCollaborationRequest(BaseModel):
+    topic: str = Field(default="Lên ý tưởng nội dung affiliate hôm nay", min_length=5, max_length=500)
+    campaign_id: int | None = None
+    rounds: int = Field(default=2, ge=1, le=3)
+
+
 @app.get("/api/agents/conversations")
 def list_agent_conversations(limit: int = 60, db: Session = Depends(get_db)):
     rows = list(db.scalars(select(AgentMessage).order_by(AgentMessage.created_at.desc()).limit(min(max(limit, 1), 150))).all())
