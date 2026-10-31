@@ -41,6 +41,10 @@ class GenerateImageRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=1800)
     draft_id: int | None = None
 
+class AutopilotRunRequest(BaseModel):
+    topic: str = Field(default="Affiliate content ideas", min_length=3, max_length=500)
+    agent_brief: str = Field(default="", max_length=10000)
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "affiliate-api"}
@@ -120,7 +124,7 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
     return {"id": item.id, "score": item.score, "score_breakdown": breakdown, "recommendation": item.recommendation, **brief}
 
 @app.post("/api/autopilot/run")
-def run_autopilot(db: Session = Depends(get_db)):
+def run_autopilot(payload: AutopilotRunRequest | None = None, db: Session = Depends(get_db)):
     """Generate three genuinely new AI-written drafts for human review."""
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
@@ -137,8 +141,8 @@ def run_autopilot(db: Session = Depends(get_db)):
             model=settings.openai_model, temperature=0.85,
             response_format={"type":"json_object"},
             messages=[
-                {"role":"system","content":"Create exactly 3 distinct, useful English affiliate social posts. Return JSON {posts:[{title,body}]}. Each post 120-220 words, different audience problem, angle and structure. Practical and specific. Never invent features, prices, testimonials, statistics or guarantees. Include the supplied affiliate URL and clear affiliate disclosure. Do not reuse prior content."},
-                {"role":"user","content":json.dumps({"campaign":campaign.name,"niche":campaign.niche,"network":campaign.network,"affiliate_url":affiliate_url,"previous_content":history},ensure_ascii=False)}
+                {"role":"system","content":"Create exactly 3 distinct, useful English affiliate social posts. Return JSON {posts:[{title,body}]}. Each post 120-220 words, different audience problem, angle and structure. Practical and specific. Follow the approved brief from the agent collaboration; treat it as the production direction. Never invent features, prices, testimonials, statistics or guarantees. Include the supplied affiliate URL and clear affiliate disclosure. Do not reuse prior content."},
+                {"role":"user","content":json.dumps({"campaign":campaign.name,"niche":campaign.niche,"network":campaign.network,"topic":payload.topic if payload else "Affiliate content ideas","approved_agent_brief":payload.agent_brief if payload else "","affiliate_url":affiliate_url,"previous_content":history},ensure_ascii=False)}
             ])
         parsed = json.loads(response.choices[0].message.content or "{}")
         if not isinstance(parsed.get("posts"), list) or len(parsed["posts"]) != 3:
@@ -435,11 +439,15 @@ def agents_collaborate(payload: AgentCollaborationRequest, db: Session = Depends
         from openai import OpenAI
         client = OpenAI(api_key=settings.openai_api_key)
         previous = ""
-        for turn in range(payload.rounds * 2):
-            agent = "Content Agent" if turn % 2 == 0 else "Image Agent"
-            role = ("You are the Content Agent: an evidence-conscious affiliate editor. Propose a useful, audience-specific post concept and concise draft brief. Avoid unsupported claims, fake reviews, guaranteed results, and deceptive urgency. Include a clear affiliate disclosure when relevant."
-                    if agent == "Content Agent" else
-                    "You are the Image Agent: a senior commercial art director. Critique the content brief, propose a coherent visual concept, composition, subject, lighting, palette and image-generation prompt. Flag any misleading visual implication. Respond to the Content Agent's latest message directly.")
+        for turn in range(payload.rounds * 2 + 1):
+            if turn == payload.rounds * 2:
+                agent = "Content Agent"
+                role = "You are the Content Agent. Synthesize the discussion and Image Agent critique into the final APPROVED PRODUCTION BRIEF. State the audience, key message, three distinct content angles, factual claims to avoid, and the visual direction agreed with the Image Agent. This is the final brief that production must follow."
+            else:
+                agent = "Content Agent" if turn % 2 == 0 else "Image Agent"
+                role = ("You are the Content Agent: an evidence-conscious affiliate editor. Propose a useful, audience-specific post concept and concise draft brief. Avoid unsupported claims, fake reviews, guaranteed results, and deceptive urgency. Include a clear affiliate disclosure when relevant."
+                        if agent == "Content Agent" else
+                        "You are the Image Agent: a senior commercial art director. Critique the content brief, propose a coherent visual concept, composition, subject, lighting, palette and image-generation prompt. Flag any misleading visual implication. Respond to the Content Agent's latest message directly.")
             response = client.chat.completions.create(
                 model=settings.openai_model, temperature=0.65,
                 messages=[
