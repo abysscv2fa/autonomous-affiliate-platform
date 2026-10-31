@@ -45,7 +45,7 @@ async function publishLatestImage() {
 }
 async function loadMedia() { media.value = await $fetch<any[]>(`${api}/api/media?limit=100`) }
 async function uploadMedia(event: Event) { const input = event.target as HTMLInputElement; const file = input.files?.[0]; if (!file) return; mediaBusy.value = true; mediaMessage.value = ''; try { const body = new FormData(); body.append('file', file); await $fetch(`${api}/api/media/upload`, { method: 'POST', body }); mediaMessage.value = 'Đã tải ảnh lên Cloudinary.'; await Promise.all([loadMedia(), loadActivity()]); } catch (e: any) { mediaMessage.value = e?.data?.detail || 'Tải ảnh thất bại.' } finally { mediaBusy.value = false; input.value = '' } }
-await Promise.all([loadActivity(), loadMedia(), loadPublishing(), loadAgentConversation()]).catch(() => {})
+await Promise.all([loadActivity(), loadMedia(), loadPublishing(), loadAgentConversation(), loadDrafts()]).catch(() => {})
 const selectedCampaignId = computed(() => campaigns.value.find((c: any) => c.name === 'SaaS Tools for Small Businesses')?.id)
 async function loadDrafts() {
   if (!selectedCampaignId.value) { drafts.value = []; return }
