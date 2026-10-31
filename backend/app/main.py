@@ -5,6 +5,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from pydantic import BaseModel, Field
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode, quote
+from zoneinfo import ZoneInfo
 from sqlalchemy import inspect, text
 from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -189,7 +190,35 @@ def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: st
     """Secret-protected entry point for the scheduled Render cron job."""
     if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
         raise HTTPException(401, "Unauthorized")
-    return run_autopilot(db=db)
+    result = run_autopilot(db=db)
+    setting = db.get(AppSetting, "auto_publish")
+    if setting and setting.value == "true" and settings.metricool_user_token:
+        local_now = datetime.now(ZoneInfo(settings.metricool_timezone))
+        publish_at = (local_now + timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+        campaign_id = result.get("campaign_id")
+        new_drafts = db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign_id, ContentDraft.status == "draft").order_by(ContentDraft.created_at.desc()).limit(result.get("created", 0))).all()
+        for draft in new_drafts:
+            try:
+                post = {
+                    "publicationDate": {"dateTime": publish_at.strftime("%Y-%m-%dT%H:%M:%S"), "timezone": settings.metricool_timezone},
+                    "text": draft.body,
+                    "providers": [{"network": "facebook"}, {"network": "threads"}],
+                    "autoPublish": True, "draft": False, "media": [],
+                    "mediaAltText": [], "descendants": [], "hasNotReadNotes": False,
+                    "shortener": False, "smartLinkData": {"ids": []},
+                    "facebookData": {"type": "POST"}, "threadsData": {}
+                }
+                response = metricool_request("POST", "/v2/scheduler/posts", post)
+                draft.status = "scheduled"
+                log_activity(db, "publishing.autopilot", f"Autopilot đã lên lịch bài #{draft.id} lên Facebook + Threads lúc {publish_at.strftime('%Y-%m-%d %H:%M')}", details={"draft_id": draft.id, "networks": ["facebook", "threads"], "metricool": response})
+            except HTTPException as exc:
+                log_activity(db, "publishing.failed", f"Autopilot không thể lên lịch bài #{draft.id}", "failed", {"error": str(exc.detail)})
+        db.commit()
+        result["publishing"] = "scheduled_to_metricool"
+        result["publish_at"] = publish_at.isoformat()
+    else:
+        result["publishing"] = "disabled_or_metricool_not_configured"
+    return result
 
 @app.post("/api/setup/saas-starter")
 def setup_saas_starter(db: Session = Depends(get_db)):
