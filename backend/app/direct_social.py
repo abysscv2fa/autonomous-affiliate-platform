@@ -82,3 +82,27 @@ def publish_threads(text: str, image_url: str | None = None) -> dict:
     if not post_id:
         raise SocialPublishError("Threads did not return a published post ID.")
     return {"platform": "threads", "post_id": str(post_id)}
+
+def publish_instagram(caption: str, image_url: str) -> dict:
+    """Publish a single-image feed post to an Instagram Professional account."""
+    from .config import settings
+    if not settings.instagram_user_id or not settings.instagram_access_token:
+        raise SocialPublishError("Instagram credentials are not configured.")
+    if not image_url:
+        raise SocialPublishError("Instagram feed publishing requires an image URL.")
+    base = f"https://graph.facebook.com/{GRAPH_VERSION}/{settings.instagram_user_id}"
+    container = _request(
+        f"{base}/media",
+        data={"image_url": image_url, "caption": caption, "access_token": settings.instagram_access_token},
+    )
+    creation_id = container.get("id")
+    if not creation_id:
+        raise SocialPublishError("Instagram did not return a media container ID.")
+    published = _request(
+        f"{base}/media_publish",
+        data={"creation_id": creation_id, "access_token": settings.instagram_access_token},
+    )
+    post_id = published.get("id")
+    if not post_id:
+        raise SocialPublishError("Instagram did not return a published media ID.")
+    return {"platform": "instagram", "post_id": str(post_id)}

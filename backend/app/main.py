@@ -636,16 +636,18 @@ def publishing_status(db: Session = Depends(get_db)):
     setting = db.get(AppSetting, "auto_publish")
     facebook_ready = bool(settings.facebook_page_id and settings.facebook_page_access_token)
     threads_ready = bool(settings.threads_user_id and settings.threads_access_token)
+    instagram_ready = bool(settings.instagram_user_id and settings.instagram_access_token)
     return {
         "provider": "direct_meta_api",
         "connected": facebook_ready or threads_ready,
         "facebook_connected": facebook_ready,
         "threads_connected": threads_ready,
+        "instagram_connected": instagram_ready,
         "auto_publish": setting.value.lower() == "true" if setting else True,
         "timezone": "Asia/Ho_Chi_Minh",
         "schedule_time": "19:30",
         "schedule_frequency": "daily",
-        "networks": ["facebook", "threads"],
+        "networks": ["facebook", "instagram", "threads"],
         "requires_credentials": not facebook_ready,
     }
 
@@ -681,20 +683,22 @@ def attach_draft_image(draft_id: int, asset_id: int, db: Session = Depends(get_d
 @app.post("/api/drafts/{draft_id}/publish")
 def publish_draft_now(draft_id: int, payload: PublishRequest, db: Session = Depends(get_db)):
     """Publish an approved draft immediately through Meta's direct APIs."""
-    from .direct_social import publish_facebook, publish_threads, SocialPublishError
+    from .direct_social import publish_facebook, publish_threads, publish_instagram, SocialPublishError
     draft = db.get(ContentDraft, draft_id)
     if not draft:
         raise HTTPException(404, "Không tìm thấy bản nháp.")
     if draft.status not in {"approved", "draft"}:
         raise HTTPException(409, "Bản nháp này không ở trạng thái có thể đăng.")
     networks = list(dict.fromkeys(payload.networks))
-    if not networks or any(n not in {"facebook", "threads"} for n in networks):
-        raise HTTPException(422, "Chỉ hỗ trợ Facebook và Threads trong phiên bản này.")
+    if not networks or any(n not in {"facebook", "instagram", "threads"} for n in networks):
+        raise HTTPException(422, "Nền tảng không được hỗ trợ.")
     results, failures = [], []
     for network in networks:
         try:
             if network == "facebook":
                 result = publish_facebook(draft.body, draft.image_url)
+            elif network == "instagram":
+                result = publish_instagram(draft.body, draft.image_url)
             else:
                 result = publish_threads(draft.body, draft.image_url)
             results.append(result)

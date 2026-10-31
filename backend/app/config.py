@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     facebook_page_access_token: str = ""
     threads_user_id: str = ""
     threads_access_token: str = ""
+    instagram_user_id: str = ""
+    instagram_access_token: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()
