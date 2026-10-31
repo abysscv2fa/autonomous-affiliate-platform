@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     metricool_user_id: str = "6076356"
     metricool_blog_id: str = "7771372"
     metricool_timezone: str = "Asia/Ho_Chi_Minh"
+    facebook_page_id: str = ""
+    facebook_page_access_token: str = ""
+    threads_user_id: str = ""
+    threads_access_token: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()
