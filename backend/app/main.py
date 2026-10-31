@@ -92,6 +92,70 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"id": item.id, "score": item.score, "score_breakdown": breakdown, "recommendation": item.recommendation, **brief}
 
+@app.post("/api/autopilot/run")
+def run_autopilot(db: Session = Depends(get_db)):
+    """Create a small, deduplicated batch of affiliate content drafts."""
+    campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
+    if not campaign:
+        raise HTTPException(409, "Load the SaaS starter shortlist first")
+    affiliate_url = "https://systeme.io/fr?sa=sa028522389209c1b0fb00f4f72d0250aa9dca6f5f"
+    product = "systeme.io"
+    templates = [
+        ("systeme.io for beginners: what does the all-in-one platform do?",
+         f"""If you are starting an online business, you may be comparing tools for landing pages, email marketing, sales funnels and online courses. systeme.io combines several of these functions in one platform.
+
+WHO MAY FIND IT USEFUL
+Solo founders, creators and small teams who want to test an online offer without stitching together many separate services.
+
+WHAT TO CHECK BEFORE YOU CHOOSE
+Compare the current plan limits, email sending rules, integrations, payment availability in your country and support options. Feature availability and pricing can change, so verify them on the provider's website.
+
+A sensible way to evaluate it is to map one real workflow: publish a landing page, collect a lead, send a follow-up email and deliver your offer. Decide whether the platform fits that workflow before upgrading.
+
+Explore systeme.io: {affiliate_url}
+
+Affiliate disclosure: This article contains an affiliate link. I may earn a commission if you register or purchase through it, at no extra cost to you."""),
+        ("How to evaluate an all-in-one funnel and email marketing tool",
+         f"""Choosing an online-business platform is easier when you start with the workflow rather than the feature list.
+
+1. Define the offer and the audience.
+2. Build one focused landing page.
+3. Decide how leads will be collected and followed up.
+4. Check integrations, payment methods and data-export options.
+5. Calculate the total cost as your list and sales grow.
+
+systeme.io is one platform to include in that evaluation because it brings funnel-building and email-marketing tools together. It will not automatically create demand or guarantee sales; the offer, audience and execution still matter.
+
+See the platform and current plans: {affiliate_url}
+
+Affiliate disclosure: I may earn a commission if you sign up through this affiliate link, with no additional cost to you."""),
+        ("A practical checklist before choosing systeme.io",
+         f"""Use this checklist before moving your business workflow to a new platform.
+
+- Can it support the landing page and checkout flow you actually need?
+- Are the email limits and automation features sufficient?
+- Does it support your preferred payment methods and country?
+- Can you connect your domain and essential integrations?
+- Can you export contacts and other important data?
+- Does the current plan remain affordable as usage grows?
+
+systeme.io may be worth testing if you want several online-business tools in one place. Confirm the latest terms and feature limits directly before making a decision.
+
+Visit systeme.io: {affiliate_url}
+
+Affiliate disclosure: This page contains an affiliate link. I may receive a commission from eligible referrals at no extra cost to you.""")
+    ]
+    created = 0
+    for title, body in templates:
+        exists = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title == title))
+        if exists:
+            continue
+        db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
+        created += 1
+    db.commit()
+    total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
+    return {"campaign_id": campaign.id, "created": created, "drafts_total": total, "status": "drafts_ready_for_review", "publishing": "manual_approval_required"}
+
 @app.post("/api/setup/saas-starter")
 def setup_saas_starter(db: Session = Depends(get_db)):
     """Idempotently seed a small SaaS shortlist using published vendor terms."""
