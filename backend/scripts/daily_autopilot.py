@@ -7,7 +7,7 @@ import urllib.request
 base_url = os.environ["AUTOPILOT_API_URL"].rstrip("/")
 token = os.environ["AUTOPILOT_TOKEN"]
 request = urllib.request.Request(
-    base_url + "/api/autopilot/run",
+    base_url + "/api/autopilot/scheduled",
     data=b"{}",
     headers={"Content-Type": "application/json", "X-Autopilot-Token": token},
     method="POST",
