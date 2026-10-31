@@ -631,6 +631,57 @@ def agents_collaborate(payload: AgentCollaborationRequest, db: Session = Depends
         db.rollback()
         raise HTTPException(502,"Hai AI Agent chưa thể hoàn tất trao đổi. Kiểm tra API key, model và hạn mức OpenAI.") from exc
 
+@app.post("/api/autopilot/publish-threads")
+def autopilot_publish_threads(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
+    """Secret-protected automatic Threads publisher; publishes one eligible draft."""
+    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
+        raise HTTPException(401, "Unauthorized")
+    setting = db.get(AppSetting, "auto_publish")
+    if setting and setting.value.lower() != "true":
+        return {"status": "paused", "platform": "threads"}
+    from .direct_social import publish_threads, SocialPublishError
+    if not settings.threads_user_id or not settings.threads_access_token:
+        raise HTTPException(503, "Threads chưa được kết nối. Kiểm tra THREADS_USER_ID và THREADS_ACCESS_TOKEN trên Render.")
+    campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
+    if not campaign:
+        raise HTTPException(409, "Chưa có chiến dịch để đăng.")
+    # Select drafts independently per platform; Facebook may already have published them.
+    candidates = list(db.scalars(select(ContentDraft).where(
+        ContentDraft.campaign_id == campaign.id,
+        ContentDraft.status.in_(["draft", "approved", "published"])
+    ).order_by(ContentDraft.created_at.asc()).limit(100)).all())
+    logs = list(db.scalars(select(ActivityLog).where(
+        ActivityLog.event_type.in_(["publishing.autopilot", "publishing.scheduled"])
+    ).order_by(ActivityLog.created_at.desc()).limit(500)).all())
+    sent_ids = set()
+    for row in logs:
+        try:
+            details = json.loads(row.details or "{}")
+            if details.get("platform") == "threads" and details.get("draft_id") is not None:
+                sent_ids.add(int(details["draft_id"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+    draft = next((item for item in candidates if item.id not in sent_ids), None)
+    if not draft:
+        return {"status": "skipped", "platform": "threads", "message": "Không còn bản nháp chưa đăng."}
+    if not draft.image_url:
+        asset = db.scalar(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1))
+        if asset:
+            draft.image_url = asset.secure_url
+    try:
+        published = publish_threads(draft.body, draft.image_url)
+        draft.status = "published"
+        log_activity(db, "publishing.autopilot", f"Autopilot tự động đăng bài #{draft.id} lên Threads",
+                     details={"draft_id": draft.id, **published})
+        db.commit()
+        return {"status": "published", "platform": "threads", "draft_id": draft.id,
+                "title": draft.title, **published}
+    except SocialPublishError as exc:
+        log_activity(db, "publishing.autopilot_failed", f"Autopilot đăng Threads bài #{draft.id} thất bại",
+                     "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
+        db.commit()
+        raise HTTPException(502, f"Không thể tự động đăng Threads: {str(exc)[:400]}")
+
 @app.get("/api/publishing/status")
 def publishing_status(db: Session = Depends(get_db)):
     setting = db.get(AppSetting, "auto_publish")
