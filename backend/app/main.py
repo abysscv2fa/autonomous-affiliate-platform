@@ -121,69 +121,62 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/autopilot/run")
 def run_autopilot(db: Session = Depends(get_db)):
-    """Create a deduplicated batch of three daily affiliate content drafts."""
+    """Generate three genuinely new AI-written drafts for human review."""
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
-        raise HTTPException(409, "Load the SaaS starter shortlist first")
+        raise HTTPException(409, "Chua co chien dich SaaS starter.")
+    if not settings.openai_api_key:
+        raise HTTPException(503, "Chua cau hinh OPENAI_API_KEY.")
+    existing = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id).order_by(ContentDraft.created_at.desc()).limit(30)).all())
+    history = [{"title": x.title, "body": (x.body or "")[:500]} for x in existing]
     affiliate_url = "https://systeme.io/fr?sa=sa028522389209c1b0fb00f4f72d0250aa9dca6f5f"
-    today = date.today().isoformat()
-    templates = [
-        ("Beginner guide: what systeme.io does for a small business", f"""Starting an online business often means comparing separate tools for landing pages, email marketing, sales funnels and online courses. systeme.io combines several of these functions in one platform.
-
-WHO MAY FIND IT USEFUL
-Solo founders, creators and small teams who want to test an online offer without stitching together many separate services.
-
-A SIMPLE WAY TO EVALUATE IT
-Map one real workflow: publish a landing page, collect a lead, send a follow-up email and deliver your offer. Then compare the current plan limits, email rules, integrations, payment availability in your country and support options.
-
-Do not choose based on a feature list alone. Check the latest pricing and terms directly and decide whether the platform fits your actual workflow.
-
-Explore systeme.io: {affiliate_url}
-
-Affiliate disclosure: This article contains an affiliate link. I may earn a commission if you register or purchase through it, at no extra cost to you."""),
-        ("How to compare an all-in-one funnel and email marketing platform", f"""Choosing an online-business platform is easier when you start with the workflow rather than the feature list.
-
-1. Define the offer and the audience.
-2. Build one focused landing page.
-3. Decide how leads will be collected and followed up.
-4. Check integrations, payment methods and data-export options.
-5. Calculate the total cost as your list and sales grow.
-
-systeme.io is one platform to include in that evaluation because it brings funnel-building and email-marketing tools together. It will not automatically create demand or guarantee sales; the offer, audience and execution still matter.
-
-See the platform and current plans: {affiliate_url}
-
-Affiliate disclosure: I may earn a commission if you sign up through this affiliate link, with no additional cost to you."""),
-        ("Checklist: six things to verify before choosing systeme.io", f"""Use this checklist before moving your business workflow to a new platform.
-
-- Can it support the landing page and checkout flow you actually need?
-- Are the email limits and automation features sufficient?
-- Does it support your preferred payment methods and country?
-- Can you connect your domain and essential integrations?
-- Can you export contacts and other important data?
-- Does the current plan remain affordable as usage grows?
-
-systeme.io may be worth testing if you want several online-business tools in one place. Confirm the latest terms and feature limits directly before making a decision.
-
-Visit systeme.io: {affiliate_url}
-
-Affiliate disclosure: This page contains an affiliate link. I may receive a commission from eligible referrals at no extra cost to you.""")
-    ]
-    created_titles, skipped_titles = [], []
-    for angle, body in templates:
-        title = f"{today} | {angle}"
-        existing = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title == title))
-        if existing:
-            skipped_titles.append(title)
-        else:
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+        response = client.chat.completions.create(
+            model=settings.openai_model, temperature=0.85,
+            response_format={"type":"json_object"},
+            messages=[
+                {"role":"system","content":"Create exactly 3 distinct, useful English affiliate social posts. Return JSON {posts:[{title,body}]}. Each post 120-220 words, different audience problem, angle and structure. Practical and specific. Never invent features, prices, testimonials, statistics or guarantees. Include the supplied affiliate URL and clear affiliate disclosure. Do not reuse prior content."},
+                {"role":"user","content":json.dumps({"campaign":campaign.name,"niche":campaign.niche,"network":campaign.network,"affiliate_url":affiliate_url,"previous_content":history},ensure_ascii=False)}
+            ])
+        parsed = json.loads(response.choices[0].message.content or "{}")
+        if not isinstance(parsed.get("posts"), list) or len(parsed["posts"]) != 3:
+            raise RuntimeError("AI did not return exactly three posts")
+        normalize = lambda value: " ".join("".join(c.lower() if c.isalnum() else " " for c in str(value or "")).split())
+        known = [normalize(x["title"] + " " + x["body"]) for x in history]
+        created = []
+        for post in parsed["posts"]:
+            title = str(post.get("title") or "").strip()[:220]
+            body = str(post.get("body") or "").strip()
+            if len(title) < 12 or len(body) < 250:
+                continue
+            candidate = normalize(title + " " + body)
+            words = set(w for w in candidate.split() if len(w) > 3)
+            duplicate = False
+            for old in known:
+                old_words = set(w for w in old.split() if len(w) > 3)
+                if old_words and len(words & old_words) / max(1, min(len(words), len(old_words))) > 0.78:
+                    duplicate = True
+                    break
+            if duplicate:
+                continue
             db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
-            created_titles.append(title)
-    if created_titles:
-        db.add(ActivityLog(event_type="autopilot.run", message=f"Autopilot tạo {len(created_titles)} bản nháp", details=json.dumps({"created": len(created_titles), "skipped": len(skipped_titles), "date": today})))
+            created.append(title)
+            known.append(candidate)
+        if not created:
+            raise RuntimeError("All generated posts were duplicates or too short. Try a different topic.")
+        log_activity(db,"autopilot.run",f"Content Agent created {len(created)} AI drafts",details={"created":len(created),"requested":3,"model":settings.openai_model})
         db.commit()
-    total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
-    drafts = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title.in_(created_titles) if created_titles else ContentDraft.id == -1).order_by(ContentDraft.created_at.desc())).all())
-    return {"campaign_id": campaign.id, "created": len(created_titles), "skipped": len(skipped_titles), "created_titles": created_titles, "drafts_total": total, "run_date": today, "status": "drafts_ready_for_review", "publishing": "not_connected", "drafts": [{"id": d.id, "title": d.title, "status": d.status} for d in drafts]}
+        drafts = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title.in_(created)).order_by(ContentDraft.created_at.desc())).all())
+        total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
+        return {"campaign_id":campaign.id,"created":len(created),"skipped":3-len(created),"created_titles":created,"drafts_total":total,"status":"drafts_ready_for_review","publishing":"not_connected","drafts":[{"id":d.id,"title":d.title,"status":d.status} for d in drafts]}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(502,"Content Agent failed: " + str(exc)[:350]) from exc
 
 @app.post("/api/autopilot/scheduled")
 def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
@@ -383,8 +376,6 @@ async def upload_media(file: UploadFile = File(...), db: Session = Depends(get_d
 @app.post("/api/media/generate-daily")
 def generate_daily_media(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
     """Daily Image Agent: create one campaign-matched image and save it to Cloudinary."""
-    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
-        raise HTTPException(401, "Unauthorized")
     agent_setting = db.get(AppSetting, "auto_generate_images")
     if agent_setting and agent_setting.value.lower() != "true":
         return {"status": "paused", "message": "Daily Image Agent đang tắt."}
@@ -397,19 +388,9 @@ def generate_daily_media(db: Session = Depends(get_db), x_autopilot_token: str |
     daily_drafts = list(db.scalars(
         select(ContentDraft).where(
             ContentDraft.campaign_id == campaign.id,
-            ContentDraft.title.like(f"{today} |%"),
             ContentDraft.status == "draft"
-        ).order_by(ContentDraft.created_at.asc())
+        ).order_by(ContentDraft.created_at.asc()).limit(100)
     ).all())
-    if not daily_drafts:
-        run_autopilot(db=db)
-        daily_drafts = list(db.scalars(
-            select(ContentDraft).where(
-                ContentDraft.campaign_id == campaign.id,
-                ContentDraft.title.like(f"{today} |%"),
-                ContentDraft.status == "draft"
-            ).order_by(ContentDraft.created_at.asc())
-        ).all())
     draft = next((item for item in daily_drafts if not item.image_url), None)
     if not draft:
         return {"status": "already_ready", "message": "Hôm nay chưa có bài cần tạo ảnh hoặc ảnh đã sẵn sàng."}
