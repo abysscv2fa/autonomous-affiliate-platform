@@ -59,10 +59,22 @@ def publish_facebook(message: str, image_url: str | None = None) -> dict:
     return {"platform": "facebook", "post_id": str(post_id)}
 
 
+def _threads_safe_text(text: str, max_length: int = 500) -> tuple[str, bool]:
+    """Keep the Threads API text parameter within its 500-character limit."""
+    if len(text) <= max_length:
+        return text, False
+    shortened = text[: max_length - 3]
+    # Avoid cutting a word in half where possible, while handling long unbroken URLs/tokens.
+    if " " in shortened:
+        shortened = shortened.rsplit(" ", 1)[0]
+    return shortened.rstrip() + "...", True
+
+
 def publish_threads(text: str, image_url: str | None = None) -> dict:
     from .config import settings
     if not settings.threads_user_id or not settings.threads_access_token:
         raise SocialPublishError("Threads credentials are not configured.")
+    text, was_truncated = _threads_safe_text(text)
     base = f"https://graph.threads.net/{THREADS_GRAPH_VERSION}/{settings.threads_user_id}"
     container = {"text": text}
     if image_url:
@@ -96,7 +108,7 @@ def publish_threads(text: str, image_url: str | None = None) -> dict:
     post_id = published.get("id")
     if not post_id:
         raise SocialPublishError("Threads did not return a published post ID.")
-    return {"platform": "threads", "post_id": str(post_id)}
+    return {"platform": "threads", "post_id": str(post_id), "text_truncated": was_truncated}
 
 def publish_instagram(caption: str, image_url: str) -> dict:
     """Publish a single-image feed post to an Instagram Professional account."""
