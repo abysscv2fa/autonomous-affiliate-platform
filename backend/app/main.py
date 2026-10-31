@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity, ActivityLog, MediaAsset, AppSetting
+from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity, ActivityLog, MediaAsset, AppSetting, AgentMessage
 from .schemas import CampaignCreate, CampaignOut, DraftCreate, DraftOut, ConversionCreate, OpportunityCreate, OpportunityOut
 from .research import score_opportunity, ai_research_brief
 
@@ -577,6 +577,59 @@ def metricool_request(method: str, path: str, payload: dict | None = None):
         detail = getattr(exc, "read", lambda: b"")()
         message = detail.decode("utf-8", "ignore")[:500] if detail else str(exc)[:300]
         raise HTTPException(502, f"Metricool API error: {message}") from exc
+
+
+
+class AgentCollaborationRequest(BaseModel):
+    topic: str = Field(default="Lên ý tưởng nội dung affiliate hôm nay", min_length=5, max_length=500)
+    campaign_id: int | None = None
+    rounds: int = Field(default=2, ge=1, le=3)
+
+@app.get("/api/agents/conversations")
+def list_agent_conversations(limit: int = 60, db: Session = Depends(get_db)):
+    rows = list(db.scalars(select(AgentMessage).order_by(AgentMessage.created_at.desc()).limit(min(max(limit, 1), 150))).all())
+    rows.reverse()
+    return [{"id": x.id, "session_id": x.session_id, "agent": x.agent, "message": x.message, "created_at": x.created_at.isoformat()} for x in rows]
+
+@app.post("/api/agents/collaborate")
+def agents_collaborate(payload: AgentCollaborationRequest, db: Session = Depends(get_db)):
+    if not settings.openai_api_key:
+        raise HTTPException(503, "Chưa cấu hình OPENAI_API_KEY.")
+    campaign = db.get(Campaign, payload.campaign_id) if payload.campaign_id else db.scalar(select(Campaign).order_by(Campaign.created_at.desc()))
+    context = {"campaign": campaign.name if campaign else "Affiliate content", "niche": campaign.niche if campaign else "general", "network": campaign.network if campaign else "Facebook"}
+    history = []
+    session_id = secrets.token_hex(12)
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=settings.openai_api_key)
+        previous = ""
+        for turn in range(payload.rounds * 2):
+            agent = "Content Agent" if turn % 2 == 0 else "Image Agent"
+            role = ("You are the Content Agent: an evidence-conscious affiliate editor. Propose a useful, audience-specific post concept and concise draft brief. Avoid unsupported claims, fake reviews, guaranteed results, and deceptive urgency. Include a clear affiliate disclosure when relevant."
+                    if agent == "Content Agent" else
+                    "You are the Image Agent: a senior commercial art director. Critique the content brief, propose a coherent visual concept, composition, subject, lighting, palette and image-generation prompt. Flag any misleading visual implication. Respond to the Content Agent's latest message directly.")
+            response = client.chat.completions.create(
+                model=settings.openai_model, temperature=0.65,
+                messages=[
+                    {"role":"system","content":role + " You are collaborating with another specialist agent. Be concrete and concise. Do not claim to have generated an image or published anything."},
+                    {"role":"user","content":json.dumps({"campaign":context,"topic":payload.topic,"conversation_so_far":history,"previous_agent_message":previous},ensure_ascii=False)}
+                ])
+            message = (response.choices[0].message.content or "").strip()
+            if not message:
+                raise RuntimeError("Agent returned an empty message")
+            row=AgentMessage(session_id=session_id,agent=agent,message=message)
+            db.add(row)
+            history.append({"agent":agent,"message":message})
+            previous=message
+        log_activity(db,"agents.collaboration",f"Hai AI Agent đã trao đổi {len(history)} lượt",details={"session_id":session_id,"topic":payload.topic,"campaign":context["campaign"]})
+        db.commit()
+        return {"session_id":session_id,"topic":payload.topic,"messages":[{"agent":x["agent"],"message":x["message"]} for x in history],"status":"discussion_complete"}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(502,"Hai AI Agent chưa thể hoàn tất trao đổi. Kiểm tra API key, model và hạn mức OpenAI.") from exc
 
 @app.get("/api/publishing/status")
 def publishing_status(db: Session = Depends(get_db)):
