@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"
+    autopilot_token: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()
