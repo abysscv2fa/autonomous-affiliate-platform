@@ -1,6 +1,9 @@
 import json
 import secrets
+import base64
 from datetime import date, datetime, time, timedelta, timezone
+from pydantic import BaseModel, Field
+from sqlalchemy import inspect, text
 from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -12,6 +15,10 @@ from .schemas import CampaignCreate, CampaignOut, DraftCreate, DraftOut, Convers
 from .research import score_opportunity, ai_research_brief
 
 Base.metadata.create_all(bind=engine)
+# Backward-compatible column addition for existing deployments.
+if 'image_url' not in {c['name'] for c in inspect(engine).get_columns('content_drafts')}:
+    with engine.begin() as conn:
+        conn.execute(text('ALTER TABLE content_drafts ADD COLUMN image_url VARCHAR(1500)'))
 
 def log_activity(db: Session, event_type: str, message: str, status: str = "success", details: dict | None = None):
     db.add(ActivityLog(event_type=event_type, message=message, status=status, details=json.dumps(details or {}, ensure_ascii=False)))
@@ -19,6 +26,10 @@ def log_activity(db: Session, event_type: str, message: str, status: str = "succ
 app = FastAPI(title="Autonomous Affiliate Platform API", version="0.2.0")
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+class GenerateImageRequest(BaseModel):
+    prompt: str = Field(min_length=10, max_length=1800)
+    draft_id: int | None = None
 
 @app.get("/health")
 def health():
@@ -249,3 +260,48 @@ async def upload_media(file: UploadFile = File(...), db: Session = Depends(get_d
     db.commit()
     db.refresh(asset)
     return {"id": asset.id, "public_id": asset.public_id, "url": asset.secure_url, "format": asset.format, "bytes": asset.bytes, "width": asset.width, "height": asset.height}
+
+
+@app.post("/api/media/generate")
+def generate_media(payload: GenerateImageRequest, db: Session = Depends(get_db)):
+    """Generate one editorial image with OpenAI and persist it in Cloudinary."""
+    if not settings.openai_api_key:
+        raise HTTPException(503, "Chưa cấu hình OPENAI_API_KEY để tạo ảnh AI.")
+    if not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
+        raise HTTPException(503, "Cloudinary chưa được cấu hình.")
+    draft = db.get(ContentDraft, payload.draft_id) if payload.draft_id else None
+    if payload.draft_id and not draft:
+        raise HTTPException(404, "Không tìm thấy bản nháp.")
+    try:
+        from openai import OpenAI
+        import cloudinary
+        import cloudinary.uploader
+        client = OpenAI(api_key=settings.openai_api_key)
+        result = client.images.generate(
+            model=settings.openai_image_model,
+            prompt=("Create a polished, photorealistic commercial social-media image. No text, no logos, no watermark. "
+                    "Use clear visual hierarchy, natural lighting and a professional composition. " + payload.prompt),
+            size="1024x1024",
+            quality=settings.openai_image_quality,
+            n=1,
+        )
+        image_b64 = result.data[0].b64_json
+        if not image_b64:
+            raise RuntimeError("Image provider returned no image data")
+        image_bytes = base64.b64decode(image_b64)
+        cloudinary.config(cloud_name=settings.cloudinary_cloud_name, api_key=settings.cloudinary_api_key, api_secret=settings.cloudinary_api_secret, secure=True)
+        uploaded = cloudinary.uploader.upload(image_bytes, resource_type="image", folder="affiliate-command-center/generated", format="png")
+        asset = MediaAsset(public_id=uploaded["public_id"], secure_url=uploaded["secure_url"], filename="ai-generated.png", format="png", bytes=uploaded.get("bytes", len(image_bytes)), width=uploaded.get("width", 1024), height=uploaded.get("height", 1024))
+        db.add(asset)
+        if draft:
+            draft.image_url = uploaded["secure_url"]
+        log_activity(db, "media.generate", f"AI tạo ảnh và lưu Cloudinary" + (f" cho bản nháp #{draft.id}" if draft else ""), details={"public_id": uploaded["public_id"], "draft_id": draft.id if draft else None, "model": settings.openai_image_model})
+        db.commit()
+        db.refresh(asset)
+        return {"id": asset.id, "url": asset.secure_url, "public_id": asset.public_id, "draft_id": draft.id if draft else None}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log_activity(db, "media.generate", "Tạo ảnh AI thất bại", "failed", {"error": str(exc)[:300]})
+        db.commit()
+        raise HTTPException(502, "Không thể tạo ảnh AI. Kiểm tra API key, quyền truy cập model và hạn mức tài khoản.") from exc
