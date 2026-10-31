@@ -22,6 +22,7 @@ class ContentDraft(Base):
     campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"))
     title: Mapped[str] = mapped_column(String(240))
     body: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[str | None] = mapped_column(String(1500), nullable=True, default=None)
     status: Mapped[str] = mapped_column(String(30), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     campaign: Mapped[Campaign] = relationship(back_populates="contents")
