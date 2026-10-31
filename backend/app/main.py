@@ -191,33 +191,9 @@ def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: st
     if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
         raise HTTPException(401, "Unauthorized")
     result = run_autopilot(db=db)
-    setting = db.get(AppSetting, "auto_publish")
-    if setting and setting.value == "true" and settings.metricool_user_token:
-        local_now = datetime.now(ZoneInfo(settings.metricool_timezone))
-        publish_at = (local_now + timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
-        campaign_id = result.get("campaign_id")
-        new_drafts = db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign_id, ContentDraft.status == "draft").order_by(ContentDraft.created_at.desc()).limit(result.get("created", 0))).all()
-        for draft in new_drafts:
-            try:
-                post = {
-                    "publicationDate": {"dateTime": publish_at.strftime("%Y-%m-%dT%H:%M:%S"), "timezone": settings.metricool_timezone},
-                    "text": draft.body,
-                    "providers": [{"network": "facebook"}, {"network": "threads"}],
-                    "autoPublish": True, "draft": False, "media": [],
-                    "mediaAltText": [], "descendants": [], "hasNotReadNotes": False,
-                    "shortener": False, "smartLinkData": {"ids": []},
-                    "facebookData": {"type": "POST"}, "threadsData": {}
-                }
-                response = metricool_request("POST", "/v2/scheduler/posts", post)
-                draft.status = "scheduled"
-                log_activity(db, "publishing.autopilot", f"Autopilot đã lên lịch bài #{draft.id} lên Facebook + Threads lúc {publish_at.strftime('%Y-%m-%d %H:%M')}", details={"draft_id": draft.id, "networks": ["facebook", "threads"], "metricool": response})
-            except HTTPException as exc:
-                log_activity(db, "publishing.failed", f"Autopilot không thể lên lịch bài #{draft.id}", "failed", {"error": str(exc.detail)})
-        db.commit()
-        result["publishing"] = "scheduled_to_metricool"
-        result["publish_at"] = publish_at.isoformat()
-    else:
-        result["publishing"] = "disabled_or_metricool_not_configured"
+    # Direct publishing is intentionally not automatic until OAuth credentials,
+    # scheduled-queue processing and a verified test post are configured.
+    result["publishing"] = "manual_review_required"
     return result
 
 @app.post("/api/setup/saas-starter")
@@ -365,64 +341,53 @@ def metricool_request(method: str, path: str, payload: dict | None = None):
 @app.get("/api/publishing/status")
 def publishing_status(db: Session = Depends(get_db)):
     setting = db.get(AppSetting, "auto_publish")
-    return {"connected": bool(settings.metricool_user_token), "blog_id": settings.metricool_blog_id, "timezone": settings.metricool_timezone, "auto_publish": setting.value == "true" if setting else False, "networks": ["facebook", "instagram", "threads", "pinterest", "tiktok"]}
+    facebook_ready = bool(settings.facebook_page_id and settings.facebook_page_access_token)
+    threads_ready = bool(settings.threads_user_id and settings.threads_access_token)
+    return {
+        "provider": "direct_meta_api",
+        "connected": facebook_ready or threads_ready,
+        "facebook_connected": facebook_ready,
+        "threads_connected": threads_ready,
+        "auto_publish": False,
+        "timezone": settings.metricool_timezone,
+        "networks": ["facebook", "threads"],
+        "requires_credentials": not (facebook_ready or threads_ready),
+    }
 
 @app.put("/api/publishing/settings")
-def update_publishing_settings(payload: PublishSettingsRequest, db: Session = Depends(get_db)):
-    if payload.auto_publish and not settings.metricool_user_token:
-        raise HTTPException(503, "Chưa cấu hình Metricool API token trong Render.")
-    setting = db.get(AppSetting, "auto_publish")
-    if not setting:
-        setting = AppSetting(key="auto_publish", value=str(payload.auto_publish).lower())
-        db.add(setting)
-    else:
-        setting.value = str(payload.auto_publish).lower()
-    log_activity(db, "publishing.settings", "Đã " + ("bật" if payload.auto_publish else "tắt") + " tự động xuất bản", details={"auto_publish": payload.auto_publish})
-    db.commit()
-    return {"auto_publish": payload.auto_publish}
+def update_publishing_settings(payload: PublishSettingsRequest):
+    if payload.auto_publish:
+        raise HTTPException(409, "Chưa bật tự động đăng theo lịch. Hãy kết nối và kiểm thử Facebook/Threads trước.")
+    return {"auto_publish": False, "provider": "direct_meta_api"}
 
-@app.post("/api/drafts/{draft_id}/schedule")
-def schedule_draft(draft_id: int, payload: PublishRequest, db: Session = Depends(get_db)):
+@app.post("/api/drafts/{draft_id}/publish")
+def publish_draft_now(draft_id: int, payload: PublishRequest, db: Session = Depends(get_db)):
+    """Publish an approved draft immediately through Meta's direct APIs."""
+    from .direct_social import publish_facebook, publish_threads, SocialPublishError
     draft = db.get(ContentDraft, draft_id)
     if not draft:
         raise HTTPException(404, "Không tìm thấy bản nháp.")
+    if draft.status not in {"approved", "draft"}:
+        raise HTTPException(409, "Bản nháp này không ở trạng thái có thể đăng.")
     networks = list(dict.fromkeys(payload.networks))
-    if any(n not in ALLOWED_METRICOOL_NETWORKS for n in networks):
-        raise HTTPException(422, "Kênh đăng không hợp lệ.")
-    if any(n in {"instagram", "tiktok", "pinterest"} for n in networks) and not draft.image_url:
-        raise HTTPException(422, "Instagram, TikTok và Pinterest cần ảnh. Hãy tạo ảnh AI hoặc tải ảnh lên trước.")
-    try:
-        datetime.strptime(payload.date_time, "%Y-%m-%dT%H:%M")
-    except ValueError:
-        raise HTTPException(422, "Thời gian phải theo định dạng YYYY-MM-DDTHH:MM.")
-    post = {
-        "publicationDate": {"dateTime": payload.date_time + ":00", "timezone": settings.metricool_timezone},
-        "text": draft.body,
-        "providers": [{"network": n} for n in networks],
-        "autoPublish": True,
-        "draft": False,
-        "media": [draft.image_url] if draft.image_url else [],
-        "mediaAltText": [],
-        "descendants": [],
-        "hasNotReadNotes": False,
-        "shortener": False,
-        "smartLinkData": {"ids": []},
-        "facebookData": {"type": "POST"},
-        "instagramData": {"type": "POST", "isAiGenerated": bool(draft.image_url)},
-        "threadsData": {},
-        "pinterestData": {"boardId": "", "pinTitle": draft.title, "isAiGenerated": bool(draft.image_url)},
-        "tiktokData": {"title": draft.title, "isAigc": bool(draft.image_url)}
-    }
-    # Pinterest requires a configured board; exclude it until the user sets one.
-    if "pinterest" in networks:
-        raise HTTPException(422, "Pinterest cần boardId. Chưa bật kênh này trong lịch tự động.")
-    try:
-        result = metricool_request("POST", "/v2/scheduler/posts", post)
-        draft.status = "scheduled"
-        log_activity(db, "publishing.scheduled", f"Đã lên lịch bài #{draft.id} lên {', '.join(networks)} lúc {payload.date_time}", details={"draft_id": draft.id, "networks": networks, "date_time": payload.date_time, "metricool": result})
-        db.commit()
-        return {"status": "scheduled", "result": result}
-    except HTTPException as exc:
-        log_activity(db, "publishing.failed", f"Lên lịch bài #{draft.id} thất bại", "failed", {"error": str(exc.detail)})
-        db.commit()
-        raise
+    if not networks or any(n not in {"facebook", "threads"} for n in networks):
+        raise HTTPException(422, "Chỉ hỗ trợ Facebook và Threads trong phiên bản này.")
+    results, failures = [], []
+    for network in networks:
+        try:
+            if network == "facebook":
+                result = publish_facebook(draft.body, draft.image_url)
+            else:
+                result = publish_threads(draft.body, draft.image_url)
+            results.append(result)
+            log_activity(db, "publishing.published", f"Đã đăng bài #{draft.id} lên {network}", details={"draft_id": draft.id, **result})
+        except SocialPublishError as exc:
+            failures.append({"platform": network, "error": str(exc)[:500]})
+            log_activity(db, "publishing.failed", f"Đăng bài #{draft.id} lên {network} thất bại", "failed", {"error": str(exc)[:500]})
+    if results:
+        draft.status = "published"
+    db.commit()
+    if failures:
+        return {"status": "partial" if results else "failed", "published": results, "failures": failures}
+    return {"status": "published", "published": results}
+
