@@ -415,6 +415,21 @@ def update_publishing_settings(payload: PublishSettingsRequest):
         raise HTTPException(409, "Chưa bật tự động đăng theo lịch. Hãy kết nối và kiểm thử Facebook/Threads trước.")
     return {"auto_publish": False, "provider": "direct_meta_api"}
 
+@app.put("/api/drafts/{draft_id}/image")
+def attach_draft_image(draft_id: int, asset_id: int, db: Session = Depends(get_db)):
+    draft = db.get(ContentDraft, draft_id)
+    if not draft:
+        raise HTTPException(404, "Không tìm thấy bản nháp.")
+    asset = db.get(MediaAsset, asset_id)
+    if not asset:
+        raise HTTPException(404, "Không tìm thấy ảnh trong thư viện Cloudinary.")
+    if draft.status == "published":
+        raise HTTPException(409, "Bài đã đăng; không thể thay ảnh sau khi xuất bản.")
+    draft.image_url = asset.secure_url
+    log_activity(db, "content.image_attached", f"Đã gắn ảnh vào bài #{draft.id}", details={"draft_id": draft.id, "asset_id": asset.id, "public_id": asset.public_id})
+    db.commit()
+    return {"draft_id": draft.id, "asset_id": asset.id, "image_url": asset.secure_url}
+
 @app.post("/api/drafts/{draft_id}/publish")
 def publish_draft_now(draft_id: int, payload: PublishRequest, db: Session = Depends(get_db)):
     """Publish an approved draft immediately through Meta's direct APIs."""
