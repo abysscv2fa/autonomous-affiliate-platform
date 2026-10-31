@@ -8,6 +8,16 @@ const { data: networks } = await useFetch<any[]>(`${api}/api/research/networks`,
 const productName = ref(''), vendor = ref(''), commission = ref(20), recurring = ref(false), evidence = ref(3)
 const systemeAffiliateLink = 'https://systeme.io/fr?sa=sa028522389209c1b0fb00f4f72d0250aa9dca6f5f'
 const draftBusy = ref(false), draftMessage = ref('')
+const autopilotBusy = ref(false), autopilotMessage = ref('')
+async function runAutopilot() {
+  autopilotBusy.value = true; autopilotMessage.value = ''
+  try {
+    const result: any = await $fetch(api + '/api/autopilot/run', { method: 'POST' })
+    autopilotMessage.value = `Autopilot created ${result.created} new drafts; ${result.drafts_total} drafts now in the campaign. Review before publishing.`
+    await refresh()
+  } catch (e: any) { autopilotMessage.value = e?.data?.detail || 'Autopilot could not run.' }
+  finally { autopilotBusy.value = false }
+}
 async function createSystemeDraft() {
   const campaign = campaigns.value.find((c: any) => c.name === 'SaaS Tools for Small Businesses')
   if (!campaign) { draftMessage.value = 'Load the SaaS starter shortlist first.'; return }
@@ -70,6 +80,7 @@ async function createCampaign() {
     <section class="panel"><div class="panel-head"><div><h2>Start SaaS campaign</h2><p class="muted">Load an initial shortlist with commission terms linked to official vendor pages.</p></div><button :disabled="seedBusy" @click="loadSaaSStarter">{{ seedBusy ? "Loading…" : "Load SaaS starter shortlist" }}</button></div><p v-if="seedMessage" class="muted">{{ seedMessage }}</p></section>
     <section class="panel"><h2>AI Research Agent · Opportunity intake</h2><p class="muted">Add a candidate program using facts verified from its official page. The score prioritizes research; it is not a revenue forecast.</p><form @submit.prevent="addOpportunity"><input v-model="productName" placeholder="Product / SaaS name" required minlength="2"><input v-model="vendor" placeholder="Vendor name"><input v-model.number="commission" type="number" min="0" max="100" step="0.5" aria-label="Commission percent"><label class="check"><input v-model="recurring" type="checkbox"> Recurring</label><button :disabled="researchBusy">{{ researchBusy ? 'Saving…' : 'Score opportunity' }}</button></form><p v-if="researchError" class="error">{{ researchError }}</p><div v-for="o in opportunities" :key="o.id" class="campaign"><div><b>{{ o.product_name }}</b><small>{{ o.vendor_name || 'Vendor not specified' }} · {{ o.network }} · {{ o.commission_pct }}% {{ o.recurring ? 'recurring' : 'one-time' }}</small><small v-if="o.ai_brief" class="brief">{{ o.ai_brief }}</small></div><div class="score"><b>{{ o.score }}/100</b><small>{{ o.recommendation.replaceAll('_',' ') }}</small><button class="mini" @click="analyzeOpportunity(o.id)">Analyze</button></div></div><div v-if="!opportunities.length" class="empty">No opportunities yet. Add a product or SaaS program to begin.</div></section>
     <section class="panel"><div class="panel-head"><div><h2>systeme.io · Your affiliate link</h2><p class="muted">60% lifetime commission is the advertised program rate; actual earnings depend on eligible referrals and program terms.</p></div><button :disabled="draftBusy" @click="createSystemeDraft">{{ draftBusy ? 'Creating…' : 'Create first content draft' }}</button></div><div class="affiliate-link"><code>{{ systemeAffiliateLink }}</code><button class="mini" @click="globalThis.navigator?.clipboard?.writeText(systemeAffiliateLink)">Copy link</button></div><p v-if="draftMessage" class="muted">{{ draftMessage }}</p><p class="muted">Draft includes an affiliate disclosure. It is saved for review and is not published automatically.</p></section>
+    <section class="panel"><div class="panel-head"><div><h2>Affiliate Autopilot</h2><p class="muted">Generate a batch of three useful content drafts with your affiliate link and disclosure. Duplicate drafts are skipped.</p></div><button :disabled="autopilotBusy" @click="runAutopilot">{{ autopilotBusy ? 'Running…' : 'Run content autopilot' }}</button></div><p v-if="autopilotMessage" class="muted">{{ autopilotMessage }}</p><p class="muted">This version automates draft creation. Publishing and traffic distribution remain manual until publishing accounts and permissions are connected.</p></section>
     <section class="panel"><h2>Affiliate network shortlist</h2><div v-for="n in networks" :key="n.name" class="campaign"><div><b>{{ n.name }}</b><small>{{ n.best_for }} · {{ n.cost }}</small></div><a :href="n.url" target="_blank" rel="noopener">Official site ↗</a></div></section>
     <footer>Human approval is required before publishing, outreach, or spending. No revenue is assumed.</footer>
   </main>
