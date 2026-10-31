@@ -4,11 +4,13 @@ Credentials are supplied only through server-side environment variables.
 This module never reports success until the platform returns a post identifier.
 """
 import json
+import time
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 GRAPH_VERSION = "v26.0"
+THREADS_GRAPH_VERSION = "v1.0"
 
 
 class SocialPublishError(RuntimeError):
@@ -61,7 +63,7 @@ def publish_threads(text: str, image_url: str | None = None) -> dict:
     from .config import settings
     if not settings.threads_user_id or not settings.threads_access_token:
         raise SocialPublishError("Threads credentials are not configured.")
-    base = f"https://graph.threads.net/{GRAPH_VERSION}/{settings.threads_user_id}"
+    base = f"https://graph.threads.net/{THREADS_GRAPH_VERSION}/{settings.threads_user_id}"
     container = {"text": text}
     if image_url:
         container.update({"media_type": "IMAGE", "image_url": image_url})
@@ -74,6 +76,19 @@ def publish_threads(text: str, image_url: str | None = None) -> dict:
     creation_id = created.get("id")
     if not creation_id:
         raise SocialPublishError("Threads did not return a media container ID.")
+    # Wait for asynchronous media processing before publishing.
+    container_url = f"https://graph.threads.net/{THREADS_GRAPH_VERSION}/{creation_id}?fields=status,error_message"
+    deadline = time.monotonic() + 30
+    while True:
+        status = _request(container_url, method="GET", token=settings.threads_access_token)
+        state = str(status.get("status", "")).upper()
+        if state == "FINISHED":
+            break
+        if state in {"ERROR", "EXPIRED"}:
+            raise SocialPublishError(str(status.get("error_message") or ("Threads media container status: " + state))[:700])
+        if time.monotonic() >= deadline:
+            raise SocialPublishError("Threads media container did not finish processing (status: " + (state or "unknown") + ").")
+        time.sleep(2)
     published = _request(
         f"{base}/threads_publish",
         data={"creation_id": creation_id, "access_token": settings.threads_access_token},
