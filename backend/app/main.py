@@ -1,5 +1,7 @@
 import json
-from fastapi import FastAPI, Depends, HTTPException
+import secrets
+from datetime import date
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
@@ -93,8 +95,10 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
     return {"id": item.id, "score": item.score, "score_breakdown": breakdown, "recommendation": item.recommendation, **brief}
 
 @app.post("/api/autopilot/run")
-def run_autopilot(db: Session = Depends(get_db)):
-    """Create a small, deduplicated batch of affiliate content drafts."""
+def run_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
+    """Create one deduplicated daily affiliate content draft; protected for scheduled runs."""
+    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
+        raise HTTPException(401, "Unauthorized")
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
         raise HTTPException(409, "Load the SaaS starter shortlist first")
@@ -145,16 +149,19 @@ Visit systeme.io: {affiliate_url}
 
 Affiliate disclosure: This page contains an affiliate link. I may receive a commission from eligible referrals at no extra cost to you.""")
     ]
+    # Rotate through three useful angles and create at most one dated draft per day.
+    today = date.today().isoformat()
+    day_index = date.today().timetuple().tm_yday % len(templates)
+    base_title, body = templates[day_index]
+    title = f"{today} | {base_title}"
+    existing = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title == title))
     created = 0
-    for title, body in templates:
-        exists = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title == title))
-        if exists:
-            continue
+    if not existing:
         db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
-        created += 1
-    db.commit()
+        db.commit()
+        created = 1
     total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
-    return {"campaign_id": campaign.id, "created": created, "drafts_total": total, "status": "drafts_ready_for_review", "publishing": "manual_approval_required"}
+    return {"campaign_id": campaign.id, "created": created, "drafts_total": total, "run_date": today, "status": "drafts_ready_for_review", "publishing": "manual_approval_required"}
 
 @app.post("/api/setup/saas-starter")
 def setup_saas_starter(db: Session = Depends(get_db)):
