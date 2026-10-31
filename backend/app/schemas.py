@@ -24,6 +24,7 @@ class DraftOut(BaseModel):
     campaign_id: int
     title: str
     body: str
+    image_url: str | None = None
     status: str
     created_at: datetime
     model_config = {"from_attributes": True}
