@@ -96,29 +96,27 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/autopilot/run")
 def run_autopilot(db: Session = Depends(get_db)):
-    """Create one deduplicated daily affiliate content draft for an interactive run."""
+    """Create a deduplicated batch of three daily affiliate content drafts."""
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
         raise HTTPException(409, "Load the SaaS starter shortlist first")
     affiliate_url = "https://systeme.io/fr?sa=sa028522389209c1b0fb00f4f72d0250aa9dca6f5f"
-    product = "systeme.io"
+    today = date.today().isoformat()
     templates = [
-        ("systeme.io for beginners: what does the all-in-one platform do?",
-         f"""If you are starting an online business, you may be comparing tools for landing pages, email marketing, sales funnels and online courses. systeme.io combines several of these functions in one platform.
+        ("Beginner guide: what systeme.io does for a small business", f"""Starting an online business often means comparing separate tools for landing pages, email marketing, sales funnels and online courses. systeme.io combines several of these functions in one platform.
 
 WHO MAY FIND IT USEFUL
 Solo founders, creators and small teams who want to test an online offer without stitching together many separate services.
 
-WHAT TO CHECK BEFORE YOU CHOOSE
-Compare the current plan limits, email sending rules, integrations, payment availability in your country and support options. Feature availability and pricing can change, so verify them on the provider's website.
+A SIMPLE WAY TO EVALUATE IT
+Map one real workflow: publish a landing page, collect a lead, send a follow-up email and deliver your offer. Then compare the current plan limits, email rules, integrations, payment availability in your country and support options.
 
-A sensible way to evaluate it is to map one real workflow: publish a landing page, collect a lead, send a follow-up email and deliver your offer. Decide whether the platform fits that workflow before upgrading.
+Do not choose based on a feature list alone. Check the latest pricing and terms directly and decide whether the platform fits your actual workflow.
 
 Explore systeme.io: {affiliate_url}
 
 Affiliate disclosure: This article contains an affiliate link. I may earn a commission if you register or purchase through it, at no extra cost to you."""),
-        ("How to evaluate an all-in-one funnel and email marketing tool",
-         f"""Choosing an online-business platform is easier when you start with the workflow rather than the feature list.
+        ("How to compare an all-in-one funnel and email marketing platform", f"""Choosing an online-business platform is easier when you start with the workflow rather than the feature list.
 
 1. Define the offer and the audience.
 2. Build one focused landing page.
@@ -131,8 +129,7 @@ systeme.io is one platform to include in that evaluation because it brings funne
 See the platform and current plans: {affiliate_url}
 
 Affiliate disclosure: I may earn a commission if you sign up through this affiliate link, with no additional cost to you."""),
-        ("A practical checklist before choosing systeme.io",
-         f"""Use this checklist before moving your business workflow to a new platform.
+        ("Checklist: six things to verify before choosing systeme.io", f"""Use this checklist before moving your business workflow to a new platform.
 
 - Can it support the landing page and checkout flow you actually need?
 - Are the email limits and automation features sufficient?
@@ -147,19 +144,20 @@ Visit systeme.io: {affiliate_url}
 
 Affiliate disclosure: This page contains an affiliate link. I may receive a commission from eligible referrals at no extra cost to you.""")
     ]
-    # Rotate through three useful angles and create at most one dated draft per day.
-    today = date.today().isoformat()
-    day_index = date.today().timetuple().tm_yday % len(templates)
-    base_title, body = templates[day_index]
-    title = f"{today} | {base_title}"
-    existing = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title == title))
-    created = 0
-    if not existing:
-        db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
+    created_titles, skipped_titles = [], []
+    for angle, body in templates:
+        title = f"{today} | {angle}"
+        existing = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title == title))
+        if existing:
+            skipped_titles.append(title)
+        else:
+            db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
+            created_titles.append(title)
+    if created_titles:
         db.commit()
-        created = 1
     total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
-    return {"campaign_id": campaign.id, "created": created, "drafts_total": total, "run_date": today, "status": "drafts_ready_for_review", "publishing": "manual_approval_required"}
+    drafts = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title.in_(created_titles) if created_titles else ContentDraft.id == -1).order_by(ContentDraft.created_at.desc())).all())
+    return {"campaign_id": campaign.id, "created": len(created_titles), "skipped": len(skipped_titles), "created_titles": created_titles, "drafts_total": total, "run_date": today, "status": "drafts_ready_for_review", "publishing": "not_connected", "drafts": [{"id": d.id, "title": d.title, "status": d.status} for d in drafts]}
 
 @app.post("/api/autopilot/scheduled")
 def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
