@@ -1,17 +1,21 @@
 import json
 import secrets
-from datetime import date
-from fastapi import FastAPI, Depends, HTTPException, Header
+from datetime import date, datetime, time, timedelta, timezone
+from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity
+from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity, ActivityLog, MediaAsset
 from .schemas import CampaignCreate, CampaignOut, DraftCreate, DraftOut, ConversionCreate, OpportunityCreate, OpportunityOut
 from .research import score_opportunity, ai_research_brief
 
 Base.metadata.create_all(bind=engine)
+
+def log_activity(db: Session, event_type: str, message: str, status: str = "success", details: dict | None = None):
+    db.add(ActivityLog(event_type=event_type, message=message, status=status, details=json.dumps(details or {}, ensure_ascii=False)))
+
 app = FastAPI(title="Autonomous Affiliate Platform API", version="0.2.0")
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -154,6 +158,7 @@ Affiliate disclosure: This page contains an affiliate link. I may receive a comm
             db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
             created_titles.append(title)
     if created_titles:
+        db.add(ActivityLog(event_type="autopilot.run", message=f"Autopilot tạo {len(created_titles)} bản nháp", details=json.dumps({"created": len(created_titles), "skipped": len(skipped_titles), "date": today})))
         db.commit()
     total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
     drafts = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title.in_(created_titles) if created_titles else ContentDraft.id == -1).order_by(ContentDraft.created_at.desc())).all())
@@ -200,3 +205,47 @@ def affiliate_network_catalog():
         {"name": "PartnerStack", "best_for": "B2B SaaS and recurring software partnerships", "cost": "Apply as a partner; individual programs approve partners", "url": "https://partnerstack.com/our-partner-program/partners-affiliate", "priority": 1},
         {"name": "Amazon Associates", "best_for": "Physical products and buyer-intent comparison content", "cost": "No paid inventory; separate locale applications and program rules apply", "url": "https://affiliate-program.amazon.com/", "priority": 3}
     ]
+
+
+@app.get("/api/activity")
+def list_activity(date_from: date | None = None, date_to: date | None = None, limit: int = 100, db: Session = Depends(get_db)):
+    limit = max(1, min(limit, 300))
+    query = select(ActivityLog)
+    if date_from:
+        start = datetime.combine(date_from, time.min, tzinfo=timezone.utc)
+        query = query.where(ActivityLog.created_at >= start)
+    if date_to:
+        end = datetime.combine(date_to + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        query = query.where(ActivityLog.created_at < end)
+    rows = db.scalars(query.order_by(ActivityLog.created_at.desc()).limit(limit)).all()
+    return [{"id": x.id, "event_type": x.event_type, "message": x.message, "status": x.status, "details": json.loads(x.details or "{}"), "created_at": x.created_at.isoformat()} for x in rows]
+
+@app.get("/api/media")
+def list_media(limit: int = 100, db: Session = Depends(get_db)):
+    rows = db.scalars(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(max(1, min(limit, 200)))).all()
+    return [{"id": x.id, "public_id": x.public_id, "url": x.secure_url, "filename": x.filename, "format": x.format, "bytes": x.bytes, "width": x.width, "height": x.height, "created_at": x.created_at.isoformat()} for x in rows]
+
+@app.post("/api/media/upload")
+async def upload_media(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    if not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
+        raise HTTPException(503, "Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.")
+    if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(415, "Only JPG, PNG and WebP images are supported.")
+    data = await file.read()
+    if not data or len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Image must be between 1 byte and 10 MB.")
+    try:
+        import cloudinary
+        import cloudinary.uploader
+        cloudinary.config(cloud_name=settings.cloudinary_cloud_name, api_key=settings.cloudinary_api_key, api_secret=settings.cloudinary_api_secret, secure=True)
+        result = cloudinary.uploader.upload(data, resource_type="image", folder="affiliate-command-center", use_filename=True, unique_filename=True)
+    except Exception as exc:
+        log_activity(db, "media.upload", f"Upload ảnh thất bại: {file.filename or 'image'}", "failed", {"error": str(exc)[:300]})
+        db.commit()
+        raise HTTPException(502, "Cloudinary upload failed. Check credentials and Cloudinary account.") from exc
+    asset = MediaAsset(public_id=result["public_id"], secure_url=result["secure_url"], filename=file.filename or "", format=result.get("format",""), bytes=result.get("bytes",len(data)), width=result.get("width",0), height=result.get("height",0))
+    db.add(asset)
+    log_activity(db, "media.upload", f"Đã lưu ảnh {file.filename or result['public_id']} lên Cloudinary", details={"public_id": result["public_id"], "url": result["secure_url"]})
+    db.commit()
+    db.refresh(asset)
+    return {"id": asset.id, "public_id": asset.public_id, "url": asset.secure_url, "format": asset.format, "bytes": asset.bytes, "width": asset.width, "height": asset.height}
