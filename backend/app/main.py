@@ -95,10 +95,8 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
     return {"id": item.id, "score": item.score, "score_breakdown": breakdown, "recommendation": item.recommendation, **brief}
 
 @app.post("/api/autopilot/run")
-def run_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
-    """Create one deduplicated daily affiliate content draft; protected for scheduled runs."""
-    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
-        raise HTTPException(401, "Unauthorized")
+def run_autopilot(db: Session = Depends(get_db)):
+    """Create one deduplicated daily affiliate content draft for an interactive run."""
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
         raise HTTPException(409, "Load the SaaS starter shortlist first")
@@ -162,6 +160,13 @@ Affiliate disclosure: This page contains an affiliate link. I may receive a comm
         created = 1
     total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
     return {"campaign_id": campaign.id, "created": created, "drafts_total": total, "run_date": today, "status": "drafts_ready_for_review", "publishing": "manual_approval_required"}
+
+@app.post("/api/autopilot/scheduled")
+def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
+    """Secret-protected entry point for the scheduled Render cron job."""
+    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
+        raise HTTPException(401, "Unauthorized")
+    return run_autopilot(db=db)
 
 @app.post("/api/setup/saas-starter")
 def setup_saas_starter(db: Session = Depends(get_db)):
