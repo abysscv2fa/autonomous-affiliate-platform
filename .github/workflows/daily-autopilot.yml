@@ -1,0 +1,37 @@
+name: Daily Affiliate Autopilot
+
+on:
+  schedule:
+    # 08:13 Vietnam time daily; avoid the top of the hour.
+    - cron: "13 8 * * *"
+      timezone: "Asia/Ho_Chi_Minh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-affiliate-autopilot
+  cancel-in-progress: false
+
+jobs:
+  create-daily-draft:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wake backend and create one daily draft
+        env:
+          AUTOPILOT_API_URL: https://affiliate-backend-yfy6.onrender.com
+          AUTOPILOT_TOKEN: ${{ secrets.AUTOPILOT_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${AUTOPILOT_TOKEN}" ]]; then
+            echo "::error::Repository secret AUTOPILOT_TOKEN is not configured."
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error \
+            --retry 5 --retry-all-errors --retry-delay 20 --max-time 180 \
+            -X POST "${AUTOPILOT_API_URL}/api/autopilot/scheduled" \
+            -H "X-Autopilot-Token: ${AUTOPILOT_TOKEN}" \
+            -H "Content-Type: application/json"
