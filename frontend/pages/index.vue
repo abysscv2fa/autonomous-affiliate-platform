@@ -23,7 +23,7 @@ async function startAgentDiscussion() {
     const meeting:any = await $fetch(`${api}/api/agents/collaborate`, { method:'POST', body:{ topic:collaborationTopic.value, campaign_id:selectedCampaignId.value || null, rounds:2 } })
     collaborationSession.value = meeting.session_id
     collaborationMessages.value = (meeting.messages || []).map((m:any,i:number)=>({...m,id:i,session_id:meeting.session_id}))
-    const approvedBrief = (meeting.messages || []).map((m:any)=>`${m.agent}: ${m.message}`).join("\n\n")
+    const approvedBrief = (meeting.messages || []).map((m:any)=>`${m.agent}: ${m.message}`).join("\n\n").slice(0,9500)
     const imageBrief = [...(meeting.messages || [])].reverse().find((m:any)=>m.agent === 'Image Agent')?.message || ''
     const result:any = await $fetch(`${api}/api/autopilot/run`, { method:'POST', body:{ topic:collaborationTopic.value, agent_brief:approvedBrief } })
     const imageErrors:string[] = []
