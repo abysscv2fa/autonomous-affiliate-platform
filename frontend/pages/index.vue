@@ -6,6 +6,16 @@ const { data: campaigns, refresh: refreshCampaigns } = await useFetch<any[]>(`${
 const { data: opportunities, refresh: refreshOpportunities } = await useFetch<any[]>(`${api}/api/research/opportunities`, { default: () => [] })
 const { data: networks } = await useFetch<any[]>(`${api}/api/research/networks`, { default: () => [] })
 const productName = ref(''), vendor = ref(''), commission = ref(20), recurring = ref(false), evidence = ref(3)
+const seedBusy = ref(false), seedMessage = ref('')
+async function loadSaaSStarter() {
+  seedBusy.value = true; seedMessage.value = ''
+  try {
+    const result: any = await $fetch(api + '/api/setup/saas-starter', { method: 'POST' })
+    seedMessage.value = 'Added ' + result.opportunities_added + ' new candidates. ' + result.opportunities_total + ' total in the shortlist.'
+    await Promise.all([refreshOpportunities(), refresh(), refreshCampaigns()])
+  } catch (e: any) { seedMessage.value = e?.data?.detail || 'Could not load the SaaS shortlist.' }
+  finally { seedBusy.value = false }
+}
 const researchBusy = ref(false), researchError = ref('')
 async function addOpportunity() {
   if (productName.value.trim().length < 2) return
@@ -34,6 +44,7 @@ async function createCampaign() {
     <section class="metrics"><article><small>CAMPAIGNS</small><strong>{{ stats.campaigns }}</strong></article><article><small>CONTENT DRAFTS</small><strong>{{ stats.content_drafts }}</strong></article><article><small>CONFIRMED COMMISSION</small><strong>${{ Number(stats.confirmed_commission || 0).toFixed(2) }}</strong><em>Only confirmed conversions</em></article></section>
     <section class="panel"><h2>Create a campaign</h2><p class="muted">Start with one niche and validate demand before scaling.</p><form @submit.prevent="createCampaign"><input v-model="name" placeholder="Campaign name" required minlength="2"><select v-model="niche"><option value="technology">Technology</option><option value="home">Home & living</option><option value="fashion">Fashion</option><option value="software">Software / SaaS</option><option value="other">Other</option></select><button :disabled="busy">{{ busy ? 'Creating…' : 'Create campaign' }}</button></form><p v-if="error" class="error">{{ error }}</p></section>
     <section class="panel"><div class="panel-head"><h2>Campaign pipeline</h2><span class="muted">{{ campaigns.length }} total</span></div><div v-if="!campaigns.length" class="empty">No campaigns yet. Create the first campaign above.</div><div v-for="c in campaigns" :key="c.id" class="campaign"><div><b>{{ c.name }}</b><small>{{ c.niche }} · {{ c.network }}</small></div><span class="tag">{{ c.status }}</span></div></section>
+    <section class="panel"><div class="panel-head"><div><h2>Start SaaS campaign</h2><p class="muted">Load an initial shortlist with commission terms linked to official vendor pages.</p></div><button :disabled="seedBusy" @click="loadSaaSStarter">{{ seedBusy ? "Loading…" : "Load SaaS starter shortlist" }}</button></div><p v-if="seedMessage" class="muted">{{ seedMessage }}</p></section>
     <section class="panel"><h2>AI Research Agent · Opportunity intake</h2><p class="muted">Add a candidate program using facts verified from its official page. The score prioritizes research; it is not a revenue forecast.</p><form @submit.prevent="addOpportunity"><input v-model="productName" placeholder="Product / SaaS name" required minlength="2"><input v-model="vendor" placeholder="Vendor name"><input v-model.number="commission" type="number" min="0" max="100" step="0.5" aria-label="Commission percent"><label class="check"><input v-model="recurring" type="checkbox"> Recurring</label><button :disabled="researchBusy">{{ researchBusy ? 'Saving…' : 'Score opportunity' }}</button></form><p v-if="researchError" class="error">{{ researchError }}</p><div v-for="o in opportunities" :key="o.id" class="campaign"><div><b>{{ o.product_name }}</b><small>{{ o.vendor_name || 'Vendor not specified' }} · {{ o.network }} · {{ o.commission_pct }}% {{ o.recurring ? 'recurring' : 'one-time' }}</small><small v-if="o.ai_brief" class="brief">{{ o.ai_brief }}</small></div><div class="score"><b>{{ o.score }}/100</b><small>{{ o.recommendation.replaceAll('_',' ') }}</small><button class="mini" @click="analyzeOpportunity(o.id)">Analyze</button></div></div><div v-if="!opportunities.length" class="empty">No opportunities yet. Add a product or SaaS program to begin.</div></section>
     <section class="panel"><h2>Affiliate network shortlist</h2><div v-for="n in networks" :key="n.name" class="campaign"><div><b>{{ n.name }}</b><small>{{ n.best_for }} · {{ n.cost }}</small></div><a :href="n.url" target="_blank" rel="noopener">Official site ↗</a></div></section>
     <footer>Human approval is required before publishing, outreach, or spending. No revenue is assumed.</footer>
