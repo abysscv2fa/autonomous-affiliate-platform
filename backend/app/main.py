@@ -202,17 +202,42 @@ def run_and_publish_facebook(db: Session = Depends(get_db)):
     from .direct_social import publish_facebook, SocialPublishError
     result = run_autopilot(db=db)
     created_titles = result.get("created_titles") or []
-    if not created_titles:
-        return {**result, "publishing": "skipped_no_new_content", "message": "Không có nội dung mới; bỏ qua để tránh đăng trùng."}
-    draft = db.scalar(select(ContentDraft).where(ContentDraft.title.in_(created_titles), ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
+    draft = None
+    selected_existing_draft = False
+    if created_titles:
+        draft = db.scalar(
+            select(ContentDraft)
+            .where(
+                ContentDraft.campaign_id == result["campaign_id"],
+                ContentDraft.title.in_(created_titles),
+                ContentDraft.status == "draft",
+            )
+            .order_by(ContentDraft.created_at.asc())
+        )
+    # If today's batch already exists, use an unpublished draft from this
+    # same Autopilot campaign rather than silently skipping publication.
     if not draft:
-        return {**result, "publishing": "skipped_no_eligible_draft", "message": "Không tìm thấy bản nháp mới để đăng."}
+        draft = db.scalar(
+            select(ContentDraft)
+            .where(
+                ContentDraft.campaign_id == result["campaign_id"],
+                ContentDraft.status == "draft",
+            )
+            .order_by(ContentDraft.created_at.asc())
+        )
+        selected_existing_draft = draft is not None
+    if not draft:
+        return {
+            **result,
+            "publishing": "skipped_no_eligible_draft",
+            "message": "Không còn bản nháp Autopilot nào chưa đăng. Hãy tạo nội dung mới trước.",
+        }
     try:
         published = publish_facebook(draft.body, draft.image_url)
         draft.status = "published"
         log_activity(db, "publishing.autopilot", f"Autopilot tự động đăng bài #{draft.id} lên Facebook", details={"draft_id": draft.id, **published})
         db.commit()
-        return {**result, "publishing": "published", "published": published, "draft_id": draft.id, "title": draft.title}
+        return {**result, "publishing": "published", "published": published, "draft_id": draft.id, "title": draft.title, "selected_existing_draft": selected_existing_draft}
     except SocialPublishError as exc:
         log_activity(db, "publishing.autopilot_failed", f"Autopilot đăng Facebook bài #{draft.id} thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
         db.commit()
