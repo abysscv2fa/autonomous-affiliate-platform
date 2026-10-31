@@ -196,6 +196,27 @@ def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: st
     result["publishing"] = "manual_review_required"
     return result
 
+@app.post("/api/autopilot/run-and-publish-facebook")
+def run_and_publish_facebook(db: Session = Depends(get_db)):
+    """Generate the daily batch and automatically publish one newly-created Facebook draft."""
+    from .direct_social import publish_facebook, SocialPublishError
+    result = run_autopilot(db=db)
+    created_titles = result.get("created_titles") or []
+    if not created_titles:
+        return {**result, "publishing": "skipped_no_new_content", "message": "Không có nội dung mới; bỏ qua để tránh đăng trùng."}
+    draft = db.scalar(select(ContentDraft).where(ContentDraft.title.in_(created_titles), ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
+    if not draft:
+        return {**result, "publishing": "skipped_no_eligible_draft", "message": "Không tìm thấy bản nháp mới để đăng."}
+    try:
+        published = publish_facebook(draft.body, draft.image_url)
+        draft.status = "published"
+        log_activity(db, "publishing.autopilot", f"Autopilot tự động đăng bài #{draft.id} lên Facebook", details={"draft_id": draft.id, **published})
+        db.commit()
+        return {**result, "publishing": "published", "published": published, "draft_id": draft.id, "title": draft.title}
+    except SocialPublishError as exc:
+        log_activity(db, "publishing.autopilot_failed", f"Autopilot đăng Facebook bài #{draft.id} thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
+        db.commit()
+        raise HTTPException(502, f"Không thể tự động đăng Facebook: {str(exc)[:400]}")
 @app.post("/api/setup/saas-starter")
 def setup_saas_starter(db: Session = Depends(get_db)):
     """Idempotently seed a small SaaS shortlist using published vendor terms."""
