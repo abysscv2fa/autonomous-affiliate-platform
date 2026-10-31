@@ -201,6 +201,14 @@ def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: st
     if titles:
         draft = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == result["campaign_id"], ContentDraft.title.in_(titles), ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
     if not draft:
+        # Prefer the draft prepared by the 18:30 Image Agent before falling back to older backlog.
+        today_local = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date().isoformat()
+        draft = db.scalar(select(ContentDraft).where(
+            ContentDraft.campaign_id == result["campaign_id"],
+            ContentDraft.title.like(f"{today_local} |%"),
+            ContentDraft.status == "draft"
+        ).order_by(ContentDraft.created_at.asc()))
+    if not draft:
         draft = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == result["campaign_id"], ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
     if not draft:
         result.update({"publishing": "skipped_no_eligible_draft", "message": "Không còn bản nháp chưa đăng."})
