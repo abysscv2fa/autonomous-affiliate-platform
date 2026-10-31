@@ -3,6 +3,8 @@ import secrets
 import base64
 from datetime import date, datetime, time, timedelta, timezone
 from pydantic import BaseModel, Field
+from urllib.request import Request, urlopen
+from urllib.parse import urlencode, quote
 from sqlalchemy import inspect, text
 from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from .config import settings
 from .db import Base, engine, get_db
-from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity, ActivityLog, MediaAsset
+from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity, ActivityLog, MediaAsset, AppSetting
 from .schemas import CampaignCreate, CampaignOut, DraftCreate, DraftOut, ConversionCreate, OpportunityCreate, OpportunityOut
 from .research import score_opportunity, ai_research_brief
 
@@ -26,6 +28,13 @@ def log_activity(db: Session, event_type: str, message: str, status: str = "succ
 app = FastAPI(title="Autonomous Affiliate Platform API", version="0.2.0")
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+class PublishRequest(BaseModel):
+    date_time: str = Field(min_length=16, max_length=19)
+    networks: list[str] = Field(min_length=1)
+
+class PublishSettingsRequest(BaseModel):
+    auto_publish: bool
 
 class GenerateImageRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=1800)
@@ -305,3 +314,86 @@ def generate_media(payload: GenerateImageRequest, db: Session = Depends(get_db))
         log_activity(db, "media.generate", "Tạo ảnh AI thất bại", "failed", {"error": str(exc)[:300]})
         db.commit()
         raise HTTPException(502, "Không thể tạo ảnh AI. Kiểm tra API key, quyền truy cập model và hạn mức tài khoản.") from exc
+
+
+ALLOWED_METRICOOL_NETWORKS = {"facebook", "instagram", "threads", "pinterest", "tiktok"}
+def metricool_request(method: str, path: str, payload: dict | None = None):
+    if not settings.metricool_user_token:
+        raise HTTPException(503, "Thiếu METRICOOL_USER_TOKEN. Hãy thêm API token trong Render Environment.")
+    query = urlencode({"userId": settings.metricool_user_id, "blogId": settings.metricool_blog_id})
+    url = f"https://app.metricool.com/api{path}?{query}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = Request(url, data=data, method=method, headers={"X-Mc-Auth": settings.metricool_user_token, "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urlopen(req, timeout=25) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {"ok": True}
+    except Exception as exc:
+        detail = getattr(exc, "read", lambda: b"")()
+        message = detail.decode("utf-8", "ignore")[:500] if detail else str(exc)[:300]
+        raise HTTPException(502, f"Metricool API error: {message}") from exc
+
+@app.get("/api/publishing/status")
+def publishing_status(db: Session = Depends(get_db)):
+    setting = db.get(AppSetting, "auto_publish")
+    return {"connected": bool(settings.metricool_user_token), "blog_id": settings.metricool_blog_id, "timezone": settings.metricool_timezone, "auto_publish": setting.value == "true" if setting else False, "networks": ["facebook", "instagram", "threads", "pinterest", "tiktok"]}
+
+@app.put("/api/publishing/settings")
+def update_publishing_settings(payload: PublishSettingsRequest, db: Session = Depends(get_db)):
+    if payload.auto_publish and not settings.metricool_user_token:
+        raise HTTPException(503, "Chưa cấu hình Metricool API token trong Render.")
+    setting = db.get(AppSetting, "auto_publish")
+    if not setting:
+        setting = AppSetting(key="auto_publish", value=str(payload.auto_publish).lower())
+        db.add(setting)
+    else:
+        setting.value = str(payload.auto_publish).lower()
+    log_activity(db, "publishing.settings", "Đã " + ("bật" if payload.auto_publish else "tắt") + " tự động xuất bản", details={"auto_publish": payload.auto_publish})
+    db.commit()
+    return {"auto_publish": payload.auto_publish}
+
+@app.post("/api/drafts/{draft_id}/schedule")
+def schedule_draft(draft_id: int, payload: PublishRequest, db: Session = Depends(get_db)):
+    draft = db.get(ContentDraft, draft_id)
+    if not draft:
+        raise HTTPException(404, "Không tìm thấy bản nháp.")
+    networks = list(dict.fromkeys(payload.networks))
+    if any(n not in ALLOWED_METRICOOL_NETWORKS for n in networks):
+        raise HTTPException(422, "Kênh đăng không hợp lệ.")
+    if any(n in {"instagram", "tiktok", "pinterest"} for n in networks) and not draft.image_url:
+        raise HTTPException(422, "Instagram, TikTok và Pinterest cần ảnh. Hãy tạo ảnh AI hoặc tải ảnh lên trước.")
+    try:
+        datetime.strptime(payload.date_time, "%Y-%m-%dT%H:%M")
+    except ValueError:
+        raise HTTPException(422, "Thời gian phải theo định dạng YYYY-MM-DDTHH:MM.")
+    post = {
+        "publicationDate": {"dateTime": payload.date_time + ":00", "timezone": settings.metricool_timezone},
+        "text": draft.body,
+        "providers": [{"network": n} for n in networks],
+        "autoPublish": True,
+        "draft": False,
+        "media": [draft.image_url] if draft.image_url else [],
+        "mediaAltText": [],
+        "descendants": [],
+        "hasNotReadNotes": False,
+        "shortener": False,
+        "smartLinkData": {"ids": []},
+        "facebookData": {"type": "POST"},
+        "instagramData": {"type": "POST", "isAiGenerated": bool(draft.image_url)},
+        "threadsData": {},
+        "pinterestData": {"boardId": "", "pinTitle": draft.title, "isAiGenerated": bool(draft.image_url)},
+        "tiktokData": {"title": draft.title, "isAigc": bool(draft.image_url)}
+    }
+    # Pinterest requires a configured board; exclude it until the user sets one.
+    if "pinterest" in networks:
+        raise HTTPException(422, "Pinterest cần boardId. Chưa bật kênh này trong lịch tự động.")
+    try:
+        result = metricool_request("POST", "/v2/scheduler/posts", post)
+        draft.status = "scheduled"
+        log_activity(db, "publishing.scheduled", f"Đã lên lịch bài #{draft.id} lên {', '.join(networks)} lúc {payload.date_time}", details={"draft_id": draft.id, "networks": networks, "date_time": payload.date_time, "metricool": result})
+        db.commit()
+        return {"status": "scheduled", "result": result}
+    except HTTPException as exc:
+        log_activity(db, "publishing.failed", f"Lên lịch bài #{draft.id} thất bại", "failed", {"error": str(exc.detail)})
+        db.commit()
+        raise
