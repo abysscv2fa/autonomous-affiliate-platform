@@ -645,12 +645,23 @@ def autopilot_publish_threads(db: Session = Depends(get_db), x_autopilot_token: 
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
         raise HTTPException(409, "Chưa có chiến dịch để đăng.")
-    # Select the oldest unpublished draft. A successful publication changes its
-    # status, preventing the same item from being selected by the next run.
-    draft = db.scalar(select(ContentDraft).where(
+    # Select drafts independently per platform; Facebook may already have published them.
+    candidates = list(db.scalars(select(ContentDraft).where(
         ContentDraft.campaign_id == campaign.id,
-        ContentDraft.status.in_(["draft", "approved"])
-    ).order_by(ContentDraft.created_at.asc()))
+        ContentDraft.status.in_(["draft", "approved", "published"])
+    ).order_by(ContentDraft.created_at.asc()).limit(100)).all())
+    logs = list(db.scalars(select(ActivityLog).where(
+        ActivityLog.event_type.in_(["publishing.autopilot", "publishing.scheduled"])
+    ).order_by(ActivityLog.created_at.desc()).limit(500)).all())
+    sent_ids = set()
+    for row in logs:
+        try:
+            details = json.loads(row.details or "{}")
+            if details.get("platform") == "threads" and details.get("draft_id") is not None:
+                sent_ids.add(int(details["draft_id"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+    draft = next((item for item in candidates if item.id not in sent_ids), None)
     if not draft:
         return {"status": "skipped", "platform": "threads", "message": "Không còn bản nháp chưa đăng."}
     if not draft.image_url:
