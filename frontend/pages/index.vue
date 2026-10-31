@@ -16,6 +16,10 @@ async function startAgentDiscussion() {
   collaborationBusy.value = true; collaborationError.value = ''
   autopilotBusy.value = true; autopilotMessage.value = ''
   try {
+    if (!selectedCampaignId.value) {
+      await $fetch(`${api}/api/setup/saas-starter`, { method:'POST' })
+      await refreshCampaigns()
+    }
     const meeting:any = await $fetch(`${api}/api/agents/collaborate`, { method:'POST', body:{ topic:collaborationTopic.value, campaign_id:selectedCampaignId.value || null, rounds:2 } })
     collaborationSession.value = meeting.session_id
     collaborationMessages.value = (meeting.messages || []).map((m:any,i:number)=>({...m,id:i,session_id:meeting.session_id}))
