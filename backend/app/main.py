@@ -168,13 +168,13 @@ def run_autopilot(payload: AutopilotRunRequest | None = None, db: Session = Depe
             db.add(ContentDraft(campaign_id=campaign.id, title=title, body=body, status="draft"))
             created.append(title)
             known.append(candidate)
-        if not created:
-            raise RuntimeError("All generated posts were duplicates or too short. Try a different topic.")
+        if len(created) != 3:
+            raise RuntimeError(f"Expected 3 distinct posts but validated {len(created)}. No drafts were saved; retry with a different topic.")
         log_activity(db,"autopilot.run",f"Content Agent created {len(created)} AI drafts",details={"created":len(created),"requested":3,"model":settings.openai_model})
         db.commit()
         drafts = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.title.in_(created)).order_by(ContentDraft.created_at.desc())).all())
         total = db.scalar(select(func.count()).select_from(ContentDraft).where(ContentDraft.campaign_id == campaign.id)) or 0
-        return {"campaign_id":campaign.id,"created":len(created),"skipped":3-len(created),"created_titles":created,"drafts_total":total,"status":"drafts_ready_for_review","publishing":"not_connected","drafts":[{"id":d.id,"title":d.title,"status":d.status} for d in drafts]}
+        return {"campaign_id":campaign.id,"created":len(created),"skipped":3-len(created),"created_titles":created,"drafts_total":total,"status":"drafts_ready_for_review","publishing":"manual_review_required","drafts":[{"id":d.id,"title":d.title,"status":d.status} for d in drafts]}
     except HTTPException:
         db.rollback()
         raise
