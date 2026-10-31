@@ -92,6 +92,32 @@ def analyze_opportunity(opportunity_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"id": item.id, "score": item.score, "score_breakdown": breakdown, "recommendation": item.recommendation, **brief}
 
+@app.post("/api/setup/saas-starter")
+def setup_saas_starter(db: Session = Depends(get_db)):
+    """Idempotently seed a small SaaS shortlist using published vendor terms."""
+    campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
+    if not campaign:
+        campaign = Campaign(name="SaaS Tools for Small Businesses", niche="software", network="direct / PartnerStack / Impact")
+        db.add(campaign)
+        db.flush()
+    catalog = [
+        {"product_name": "systeme.io", "vendor_name": "systeme.io", "network": "Direct", "source_url": "https://systeme.io/affiliate-program", "commission_pct": 60, "recurring": True, "evidence_quality": 5, "audience_fit": 4, "differentiation": "All-in-one funnels, email marketing and online course platform for solo founders and small businesses.", "research_notes": "Official vendor page states 60% lifetime commission. Verify payout setup and applicable terms in the affiliate dashboard."},
+        {"product_name": "HubSpot", "vendor_name": "HubSpot", "network": "Impact", "source_url": "https://www.hubspot.com/partners/affiliates", "commission_pct": 30, "recurring": True, "evidence_quality": 5, "audience_fit": 4, "differentiation": "CRM and marketing platform for growing businesses; stronger fit for educational comparison and setup content.", "research_notes": "Official vendor page states 30% recurring for up to one year and a 180-day cookie. Application/review required."},
+        {"product_name": "Thinkific", "vendor_name": "Thinkific", "network": "PartnerStack", "source_url": "https://www.thinkific.com/affiliates/", "commission_pct": 30, "recurring": True, "evidence_quality": 5, "audience_fit": 3, "differentiation": "Online course platform for experts, educators and businesses monetizing knowledge.", "research_notes": "Official vendor page states 30% lifetime recurring on standard paid plans; Plus plans have a different fixed commission. 90-day cookie."}
+    ]
+    added = 0
+    for data in catalog:
+        exists = db.scalar(select(ResearchOpportunity).where(ResearchOpportunity.product_name == data["product_name"]))
+        if exists:
+            continue
+        item = ResearchOpportunity(category="software", target_regions="US,UK,EU", price_usd=0, **data)
+        item.score, breakdown, item.recommendation = score_opportunity(item)
+        item.score_breakdown = json.dumps(breakdown)
+        db.add(item)
+        added += 1
+    db.commit()
+    return {"campaign_id": campaign.id, "campaign": campaign.name, "opportunities_added": added, "opportunities_total": db.scalar(select(func.count()).select_from(ResearchOpportunity)) or 0}
+
 @app.get("/api/research/networks")
 def affiliate_network_catalog():
     return [
