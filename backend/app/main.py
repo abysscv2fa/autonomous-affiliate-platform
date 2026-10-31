@@ -180,119 +180,21 @@ def run_autopilot(db: Session = Depends(get_db)):
 
 @app.post("/api/autopilot/scheduled")
 def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
-    """Secret-protected daily job: create content and publish one image post to Facebook."""
+    """Legacy scheduled hook: keep it safe by generating drafts only, never publishing."""
     if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
         raise HTTPException(401, "Unauthorized")
-    setting = db.get(AppSetting, "auto_publish")
-    auto_publish = setting.value.lower() == "true" if setting else True
-    if not auto_publish:
-        return {"status": "paused", "publishing": "disabled", "message": "Tự động đăng đang tắt trong cài đặt."}
     result = run_autopilot(db=db)
-    from .direct_social import publish_facebook, SocialPublishError
-    titles = result.get("created_titles") or []
-    draft = None
-    if titles:
-        draft = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == result["campaign_id"], ContentDraft.title.in_(titles), ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
-    if not draft:
-        # Prefer the draft prepared by the 18:30 Image Agent before falling back to older backlog.
-        today_local = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date().isoformat()
-        draft = db.scalar(select(ContentDraft).where(
-            ContentDraft.campaign_id == result["campaign_id"],
-            ContentDraft.title.like(f"{today_local} |%"),
-            ContentDraft.status == "draft"
-        ).order_by(ContentDraft.created_at.asc()))
-    if not draft:
-        draft = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == result["campaign_id"], ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
-    if not draft:
-        result.update({"publishing": "skipped_no_eligible_draft", "message": "Không còn bản nháp chưa đăng."})
-        log_activity(db, "publishing.scheduled_skipped", "Lịch tự động: không có bản nháp đủ điều kiện", "warning")
-        db.commit()
-        return result
-    selected_asset = None
-    if not draft.image_url:
-        selected_asset = db.scalar(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1))
-        if not selected_asset:
-            result.update({"publishing": "skipped_no_image", "draft_id": draft.id, "message": "Không có ảnh trong Cloudinary; bỏ qua để tránh đăng bài không ảnh."})
-            log_activity(db, "publishing.scheduled_skipped", f"Lịch tự động bỏ qua bài #{draft.id}: thiếu ảnh", "warning", {"draft_id": draft.id})
-            db.commit()
-            return result
-        draft.image_url = selected_asset.secure_url
-    try:
-        published = publish_facebook(draft.body, draft.image_url)
-        draft.status = "published"
-        log_activity(db, "publishing.scheduled", f"Lịch tự động đã đăng bài #{draft.id} lên Facebook", details={"draft_id": draft.id, **published})
-        db.commit()
-        result.update({"publishing": "published", "draft_id": draft.id, "title": draft.title, "published": published, "image_url": draft.image_url})
-        return result
-    except SocialPublishError as exc:
-        log_activity(db, "publishing.scheduled_failed", f"Lịch tự động đăng bài #{draft.id} thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
-        db.commit()
-        raise HTTPException(502, f"Không thể tự động đăng Facebook: {str(exc)[:400]}")
+    result.update({
+        "publishing": "disabled_human_review_required",
+        "message": "Đã tạo bản nháp. Cần người dùng duyệt và bấm đăng thủ công; lịch tự đăng đã bị vô hiệu hóa."
+    })
+    return result
 
 @app.post("/api/autopilot/run-and-publish-facebook")
-def run_and_publish_facebook(db: Session = Depends(get_db)):
-    """Generate the daily batch and automatically publish one newly-created Facebook draft."""
-    from .direct_social import publish_facebook, SocialPublishError
-    result = run_autopilot(db=db)
-    created_titles = result.get("created_titles") or []
-    draft = None
-    selected_existing_draft = False
-    if created_titles:
-        draft = db.scalar(
-            select(ContentDraft)
-            .where(
-                ContentDraft.campaign_id == result["campaign_id"],
-                ContentDraft.title.in_(created_titles),
-                ContentDraft.status == "draft",
-            )
-            .order_by(ContentDraft.created_at.asc())
-        )
-    # If today's batch already exists, use an unpublished draft from this
-    # same Autopilot campaign rather than silently skipping publication.
-    if not draft:
-        draft = db.scalar(
-            select(ContentDraft)
-            .where(
-                ContentDraft.campaign_id == result["campaign_id"],
-                ContentDraft.status == "draft",
-            )
-            .order_by(ContentDraft.created_at.asc())
-        )
-        selected_existing_draft = draft is not None
-    if not draft:
-        return {
-            **result,
-            "publishing": "skipped_no_eligible_draft",
-            "message": "Không còn bản nháp Autopilot nào chưa đăng. Hãy tạo nội dung mới trước.",
-        }
+def run_and_publish_facebook_disabled():
+    """Publishing from an AI generation run is intentionally disabled."""
+    raise HTTPException(410, "Tự động đăng đã bị vô hiệu hóa. Hãy duyệt bản nháp và đăng thủ công.")
 
-    # Reuse an existing Cloudinary library image when the selected draft has
-    # no image. This keeps the generated copy and its image in one Facebook post.
-    selected_media_asset = None
-    if not draft.image_url:
-        selected_media_asset = db.scalar(
-            select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1)
-        )
-        if not selected_media_asset:
-            return {
-                **result,
-                "publishing": "skipped_no_image",
-                "draft_id": draft.id,
-                "title": draft.title,
-                "message": "Bản nháp chưa có ảnh và Image library Cloudinary đang trống. Hãy thêm ảnh rồi thử lại.",
-            }
-        draft.image_url = selected_media_asset.secure_url
-
-    try:
-        published = publish_facebook(draft.body, draft.image_url)
-        draft.status = "published"
-        log_activity(db, "publishing.autopilot", f"Autopilot tự động đăng bài #{draft.id} lên Facebook", details={"draft_id": draft.id, **published})
-        db.commit()
-        return {**result, "publishing": "published", "published": published, "draft_id": draft.id, "title": draft.title, "selected_existing_draft": selected_existing_draft, "image_url": draft.image_url, "image_source": "cloudinary_library" if selected_media_asset else ("draft" if draft.image_url else "none")}
-    except SocialPublishError as exc:
-        log_activity(db, "publishing.autopilot_failed", f"Autopilot đăng Facebook bài #{draft.id} thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
-        db.commit()
-        raise HTTPException(502, f"Không thể tự động đăng Facebook: {str(exc)[:400]}")
 @app.post("/api/setup/saas-starter")
 def setup_saas_starter(db: Session = Depends(get_db)):
     """Idempotently seed a small SaaS shortlist using published vendor terms."""
@@ -488,84 +390,9 @@ def generate_media(payload: GenerateImageRequest, db: Session = Depends(get_db))
 
 
 @app.post("/api/autopilot/publish-latest-image")
-def publish_latest_image_now(db: Session = Depends(get_db)):
-    """Create a post from the newest Cloudinary asset and publish it to the configured Facebook Page."""
-    from .direct_social import publish_facebook, SocialPublishError
-
-    if not settings.facebook_page_id or not settings.facebook_page_access_token:
-        raise HTTPException(503, "Facebook Page chưa được kết nối. Kiểm tra FACEBOOK_PAGE_ID và FACEBOOK_PAGE_ACCESS_TOKEN trên Render.")
-
-    asset = db.scalar(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1))
-    if not asset:
-        raise HTTPException(404, "Thư viện Cloudinary chưa có ảnh. Hãy tải ảnh lên trước.")
-
-    # Prevent accidental duplicate publishing of the same image by this one-click workflow.
-    already_published = db.scalar(
-        select(ActivityLog).where(
-            ActivityLog.event_type == "publishing.latest_image",
-            ActivityLog.details.like(f'%"{asset.public_id}"%')
-        ).limit(1)
-    )
-    if already_published:
-        raise HTTPException(409, "Ảnh mới nhất này đã được đăng bằng tính năng tự động chọn ảnh. Không đăng lặp.")
-
-    campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
-    if not campaign:
-        campaign = Campaign(name="Chiu Chiu · Social content", niche="technology", network="facebook")
-        db.add(campaign)
-        db.flush()
-
-    title = f"Không gian làm việc gọn gàng hơn · {asset.filename or asset.public_id}"
-    body = (
-        "Một góc làm việc với hai màn hình có thể giúp bạn sắp xếp nhiều tác vụ rõ ràng hơn: "
-        "một màn hình để tập trung xử lý công việc, màn hình còn lại để theo dõi tài liệu và trao đổi.\n\n"
-        "Điều quan trọng không phải là có thật nhiều thiết bị, mà là thiết lập phù hợp với cách bạn làm việc. "
-        "Bạn thích dùng một màn hình lớn hay hai màn hình song song?\n\n"
-        "#WorkSetup #DeskSetup #Productivity"
-    )
-    draft = ContentDraft(campaign_id=campaign.id, title=title[:240], body=body, image_url=asset.secure_url, status="draft")
-    db.add(draft)
-    db.flush()
-
-    try:
-        result = publish_facebook(body, asset.secure_url)
-    except SocialPublishError as exc:
-        log_activity(db, "publishing.failed", f"Đăng ảnh Cloudinary lên Facebook thất bại", "failed",
-                     {"draft_id": draft.id, "public_id": asset.public_id, "error": str(exc)[:500]})
-        db.commit()
-        raise HTTPException(502, f"Facebook từ chối đăng bài: {str(exc)[:500]}") from exc
-
-    draft.status = "published"
-    log_activity(db, "publishing.latest_image", "Đã tự chọn ảnh Cloudinary mới nhất và đăng lên Facebook",
-                 details={"draft_id": draft.id, "public_id": asset.public_id, "image_url": asset.secure_url, **result})
-    db.commit()
-    return {"status": "published", "draft_id": draft.id, "title": draft.title, "image_url": asset.secure_url, "platform": "facebook", "post_id": result["post_id"]}
-
-
-ALLOWED_METRICOOL_NETWORKS = {"facebook", "instagram", "threads", "pinterest", "tiktok"}
-def metricool_request(method: str, path: str, payload: dict | None = None):
-    if not settings.metricool_user_token:
-        raise HTTPException(503, "Thiếu METRICOOL_USER_TOKEN. Hãy thêm API token trong Render Environment.")
-    query = urlencode({"userId": settings.metricool_user_id, "blogId": settings.metricool_blog_id})
-    url = f"https://app.metricool.com/api{path}?{query}"
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = Request(url, data=data, method=method, headers={"X-Mc-Auth": settings.metricool_user_token, "Content-Type": "application/json", "Accept": "application/json"})
-    try:
-        with urlopen(req, timeout=25) as response:
-            raw = response.read().decode("utf-8")
-            return json.loads(raw) if raw else {"ok": True}
-    except Exception as exc:
-        detail = getattr(exc, "read", lambda: b"")()
-        message = detail.decode("utf-8", "ignore")[:500] if detail else str(exc)[:300]
-        raise HTTPException(502, f"Metricool API error: {message}") from exc
-
-
-
-class AgentCollaborationRequest(BaseModel):
-    topic: str = Field(default="Lên ý tưởng nội dung affiliate hôm nay", min_length=5, max_length=500)
-    campaign_id: int | None = None
-    rounds: int = Field(default=2, ge=1, le=3)
-
+def publish_latest_image_disabled():
+    """Publishing a library image without draft review is intentionally disabled."""
+    raise HTTPException(410, "Không hỗ trợ tự đăng ảnh. Hãy gắn ảnh vào bản nháp, duyệt rồi đăng thủ công.")
 @app.get("/api/agents/conversations")
 def list_agent_conversations(limit: int = 60, db: Session = Depends(get_db)):
     rows = list(db.scalars(select(AgentMessage).order_by(AgentMessage.created_at.desc()).limit(min(max(limit, 1), 150))).all())
@@ -613,56 +440,9 @@ def agents_collaborate(payload: AgentCollaborationRequest, db: Session = Depends
         raise HTTPException(502,"Hai AI Agent chưa thể hoàn tất trao đổi. Kiểm tra API key, model và hạn mức OpenAI.") from exc
 
 @app.post("/api/autopilot/publish-threads")
-def autopilot_publish_threads(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
-    """Secret-protected automatic Threads publisher; publishes one eligible draft."""
-    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
-        raise HTTPException(401, "Unauthorized")
-    setting = db.get(AppSetting, "auto_publish")
-    if setting and setting.value.lower() != "true":
-        return {"status": "paused", "platform": "threads"}
-    from .direct_social import publish_threads, SocialPublishError
-    if not settings.threads_user_id or not settings.threads_access_token:
-        raise HTTPException(503, "Threads chưa được kết nối. Kiểm tra THREADS_USER_ID và THREADS_ACCESS_TOKEN trên Render.")
-    campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
-    if not campaign:
-        raise HTTPException(409, "Chưa có chiến dịch để đăng.")
-    # Select drafts independently per platform; Facebook may already have published them.
-    candidates = list(db.scalars(select(ContentDraft).where(
-        ContentDraft.campaign_id == campaign.id,
-        ContentDraft.status.in_(["draft", "approved", "published"])
-    ).order_by(ContentDraft.created_at.asc()).limit(100)).all())
-    logs = list(db.scalars(select(ActivityLog).where(
-        ActivityLog.event_type.in_(["publishing.autopilot", "publishing.scheduled"])
-    ).order_by(ActivityLog.created_at.desc()).limit(500)).all())
-    sent_ids = set()
-    for row in logs:
-        try:
-            details = json.loads(row.details or "{}")
-            if details.get("platform") == "threads" and details.get("draft_id") is not None:
-                sent_ids.add(int(details["draft_id"]))
-        except (ValueError, TypeError, json.JSONDecodeError):
-            continue
-    draft = next((item for item in candidates if item.id not in sent_ids), None)
-    if not draft:
-        return {"status": "skipped", "platform": "threads", "message": "Không còn bản nháp chưa đăng."}
-    if not draft.image_url:
-        asset = db.scalar(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1))
-        if asset:
-            draft.image_url = asset.secure_url
-    try:
-        published = publish_threads(draft.body, draft.image_url)
-        draft.status = "published"
-        log_activity(db, "publishing.autopilot", f"Autopilot tự động đăng bài #{draft.id} lên Threads",
-                     details={"draft_id": draft.id, **published})
-        db.commit()
-        return {"status": "published", "platform": "threads", "draft_id": draft.id,
-                "title": draft.title, **published}
-    except SocialPublishError as exc:
-        log_activity(db, "publishing.autopilot_failed", f"Autopilot đăng Threads bài #{draft.id} thất bại",
-                     "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
-        db.commit()
-        raise HTTPException(502, f"Không thể tự động đăng Threads: {str(exc)[:400]}")
-
+def autopilot_publish_threads_disabled():
+    """Scheduled Threads publishing is intentionally disabled; use reviewed drafts."""
+    raise HTTPException(410, "Tự động đăng Threads đã bị vô hiệu hóa. Hãy duyệt và đăng thủ công.")
 @app.get("/api/publishing/status")
 def publishing_status(db: Session = Depends(get_db)):
     setting = db.get(AppSetting, "auto_publish")
@@ -675,7 +455,7 @@ def publishing_status(db: Session = Depends(get_db)):
         "facebook_connected": facebook_ready,
         "threads_connected": threads_ready,
         "instagram_connected": instagram_ready,
-        "auto_publish": setting.value.lower() == "true" if setting else True,
+        "auto_publish": False,
         "timezone": "Asia/Ho_Chi_Minh",
         "schedule_time": "19:30",
         "schedule_frequency": "daily",
@@ -685,8 +465,8 @@ def publishing_status(db: Session = Depends(get_db)):
 
 @app.put("/api/publishing/settings")
 def update_publishing_settings(payload: PublishSettingsRequest, db: Session = Depends(get_db)):
-    if payload.auto_publish and not (settings.facebook_page_id and settings.facebook_page_access_token):
-        raise HTTPException(409, "Cần cấu hình Facebook Page ID và Page Access Token trong Render trước khi bật lịch.")
+    if payload.auto_publish:
+        raise HTTPException(409, "Tự động đăng đã bị vô hiệu hóa. AffPilot chỉ đăng sau khi người dùng duyệt và bấm đăng thủ công.")
     setting = db.get(AppSetting, "auto_publish")
     if not setting:
         setting = AppSetting(key="auto_publish", value=str(payload.auto_publish).lower())
