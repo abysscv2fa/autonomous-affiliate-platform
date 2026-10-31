@@ -1,25 +1,24 @@
-name: Daily Affiliate Autopilot
+name: Daily Facebook Autopilot
 
 on:
   schedule:
-    # 08:13 Vietnam time daily; avoid the top of the hour.
-    - cron: "13 8 * * *"
-      timezone: "Asia/Ho_Chi_Minh"
+    # 19:30 Vietnam time = 12:30 UTC.
+    - cron: "30 12 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: daily-affiliate-autopilot
+  group: daily-facebook-autopilot
   cancel-in-progress: false
 
 jobs:
-  create-daily-drafts:
+  publish-daily-post:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Wake backend and create one daily draft
+      - name: Publish one scheduled Facebook post
         env:
           AUTOPILOT_API_URL: https://affiliate-backend-yfy6.onrender.com
           AUTOPILOT_TOKEN: ${{ secrets.AUTOPILOT_TOKEN }}
@@ -31,7 +30,7 @@ jobs:
             exit 1
           fi
           curl --fail-with-body --silent --show-error \
-            --retry 5 --retry-all-errors --retry-delay 20 --max-time 180 \
+            --retry 5 --retry-all-errors --retry-delay 20 --max-time 240 \
             -X POST "${AUTOPILOT_API_URL}/api/autopilot/scheduled" \
             -H "X-Autopilot-Token: ${AUTOPILOT_TOKEN}" \
             -H "Content-Type: application/json"

@@ -187,14 +187,46 @@ Affiliate disclosure: This page contains an affiliate link. I may receive a comm
 
 @app.post("/api/autopilot/scheduled")
 def run_scheduled_autopilot(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
-    """Secret-protected entry point for the scheduled Render cron job."""
+    """Secret-protected daily job: create content and publish one image post to Facebook."""
     if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
         raise HTTPException(401, "Unauthorized")
+    setting = db.get(AppSetting, "auto_publish")
+    auto_publish = setting.value.lower() == "true" if setting else True
+    if not auto_publish:
+        return {"status": "paused", "publishing": "disabled", "message": "Tự động đăng đang tắt trong cài đặt."}
     result = run_autopilot(db=db)
-    # Direct publishing is intentionally not automatic until OAuth credentials,
-    # scheduled-queue processing and a verified test post are configured.
-    result["publishing"] = "manual_review_required"
-    return result
+    from .direct_social import publish_facebook, SocialPublishError
+    titles = result.get("created_titles") or []
+    draft = None
+    if titles:
+        draft = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == result["campaign_id"], ContentDraft.title.in_(titles), ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
+    if not draft:
+        draft = db.scalar(select(ContentDraft).where(ContentDraft.campaign_id == result["campaign_id"], ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()))
+    if not draft:
+        result.update({"publishing": "skipped_no_eligible_draft", "message": "Không còn bản nháp chưa đăng."})
+        log_activity(db, "publishing.scheduled_skipped", "Lịch tự động: không có bản nháp đủ điều kiện", "warning")
+        db.commit()
+        return result
+    selected_asset = None
+    if not draft.image_url:
+        selected_asset = db.scalar(select(MediaAsset).order_by(MediaAsset.created_at.desc()).limit(1))
+        if not selected_asset:
+            result.update({"publishing": "skipped_no_image", "draft_id": draft.id, "message": "Không có ảnh trong Cloudinary; bỏ qua để tránh đăng bài không ảnh."})
+            log_activity(db, "publishing.scheduled_skipped", f"Lịch tự động bỏ qua bài #{draft.id}: thiếu ảnh", "warning", {"draft_id": draft.id})
+            db.commit()
+            return result
+        draft.image_url = selected_asset.secure_url
+    try:
+        published = publish_facebook(draft.body, draft.image_url)
+        draft.status = "published"
+        log_activity(db, "publishing.scheduled", f"Lịch tự động đã đăng bài #{draft.id} lên Facebook", details={"draft_id": draft.id, **published})
+        db.commit()
+        result.update({"publishing": "published", "draft_id": draft.id, "title": draft.title, "published": published, "image_url": draft.image_url})
+        return result
+    except SocialPublishError as exc:
+        log_activity(db, "publishing.scheduled_failed", f"Lịch tự động đăng bài #{draft.id} thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:500]})
+        db.commit()
+        raise HTTPException(502, f"Không thể tự động đăng Facebook: {str(exc)[:400]}")
 
 @app.post("/api/autopilot/run-and-publish-facebook")
 def run_and_publish_facebook(db: Session = Depends(get_db)):
@@ -467,17 +499,27 @@ def publishing_status(db: Session = Depends(get_db)):
         "connected": facebook_ready or threads_ready,
         "facebook_connected": facebook_ready,
         "threads_connected": threads_ready,
-        "auto_publish": False,
-        "timezone": settings.metricool_timezone,
+        "auto_publish": setting.value.lower() == "true" if setting else True,
+        "timezone": "Asia/Ho_Chi_Minh",
+        "schedule_time": "19:30",
+        "schedule_frequency": "daily",
         "networks": ["facebook", "threads"],
-        "requires_credentials": not (facebook_ready or threads_ready),
+        "requires_credentials": not facebook_ready,
     }
 
 @app.put("/api/publishing/settings")
-def update_publishing_settings(payload: PublishSettingsRequest):
-    if payload.auto_publish:
-        raise HTTPException(409, "Chưa bật tự động đăng theo lịch. Hãy kết nối và kiểm thử Facebook/Threads trước.")
-    return {"auto_publish": False, "provider": "direct_meta_api"}
+def update_publishing_settings(payload: PublishSettingsRequest, db: Session = Depends(get_db)):
+    if payload.auto_publish and not (settings.facebook_page_id and settings.facebook_page_access_token):
+        raise HTTPException(409, "Cần cấu hình Facebook Page ID và Page Access Token trong Render trước khi bật lịch.")
+    setting = db.get(AppSetting, "auto_publish")
+    if not setting:
+        setting = AppSetting(key="auto_publish", value=str(payload.auto_publish).lower())
+        db.add(setting)
+    else:
+        setting.value = str(payload.auto_publish).lower()
+    log_activity(db, "publishing.schedule_settings", "Đã bật lịch tự động đăng Facebook" if payload.auto_publish else "Đã tắt lịch tự động đăng Facebook", details={"auto_publish": payload.auto_publish, "schedule_time": "19:30", "timezone": "Asia/Ho_Chi_Minh"})
+    db.commit()
+    return {"auto_publish": payload.auto_publish, "provider": "direct_meta_api", "schedule_time": "19:30", "timezone": "Asia/Ho_Chi_Minh"}
 
 @app.put("/api/drafts/{draft_id}/image")
 def attach_draft_image(draft_id: int, asset_id: int, db: Session = Depends(get_db)):
