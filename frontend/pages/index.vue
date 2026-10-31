@@ -23,13 +23,15 @@ async function startAgentDiscussion() {
     const meeting:any = await $fetch(`${api}/api/agents/collaborate`, { method:'POST', body:{ topic:collaborationTopic.value, campaign_id:selectedCampaignId.value || null, rounds:2 } })
     collaborationSession.value = meeting.session_id
     collaborationMessages.value = (meeting.messages || []).map((m:any,i:number)=>({...m,id:i,session_id:meeting.session_id}))
-    const result:any = await $fetch(`${api}/api/autopilot/run`, { method:'POST' })
+    const approvedBrief = (meeting.messages || []).map((m:any)=>`${m.agent}: ${m.message}`).join("\\n\\n")
+    const imageBrief = [...(meeting.messages || [])].reverse().find((m:any)=>m.agent === 'Image Agent')?.message || ''
+    const result:any = await $fetch(`${api}/api/autopilot/run`, { method:'POST', body:{ topic:collaborationTopic.value, agent_brief:approvedBrief } })
     const imageErrors:string[] = []
     for (const d of (result.drafts || [])) {
       try {
         await $fetch(`${api}/api/media/generate`, { method:'POST', body:{
           draft_id:d.id,
-          prompt:`Create a premium, photorealistic editorial campaign image for this affiliate post. Title: ${d.title}. Context: ${String(d.body || '').slice(0,700)}. Audience: small business owners, creators and online entrepreneurs. Square 1:1 composition. No text, logos or watermarks.`
+          prompt:`Create a premium, photorealistic editorial campaign image for this affiliate post. Follow this visual direction agreed by the Image Agent: ${imageBrief.slice(0,650)}. Title: ${d.title}. Context: ${String(d.body || '').slice(0,500)}. Audience: small business owners, creators and online entrepreneurs. Square 1:1 composition. No text, logos or watermarks.`
         }})
       } catch (e:any) { imageErrors.push(`#${d.id}`) }
     }
