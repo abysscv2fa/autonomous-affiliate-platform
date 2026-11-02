@@ -84,7 +84,7 @@ def search_ads(payload: SearchRequest):
                 "message": "Mở Meta Ad Library để xem kết quả. Lưu quảng cáo vào AffPilot bằng cách nhập nội dung công khai; website không tự đọc dữ liệu từ tab trình duyệt."}
     # Meta's public Ad Library API provides comprehensive commercial-ad access for ads delivered in the EU.
     # For other markets, API access is generally limited to political/social-issue ads.
-    eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE"}
+    eu_countries = {"AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR","HU","IE","IT","LV","LT","LU","MT","NL","PL","PT","RO","SK","SI","ES","SE","GB"}
     if country not in eu_countries:
         return {"mode": "auto", "provider": "meta_ad_library_api", "search_url": url, "results": [],
                 "status": "region_not_supported_for_commercial_ads",
@@ -97,7 +97,7 @@ def search_ads(payload: SearchRequest):
     params = {"access_token": token, "ad_reached_countries": json.dumps([country]),
               "ad_type": "ALL", "search_terms": payload.query,
               "ad_active_status": "ACTIVE" if payload.active_only else "ALL",
-              "fields": "id,ad_archive_id,page_name,ad_creation_time,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_descriptions,ad_snapshot_url,publisher_platforms,ad_delivery_start_time,ad_delivery_stop_time",
+              "fields": "id,page_name,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_descriptions,ad_snapshot_url,publisher_platforms,ad_delivery_start_time,ad_delivery_stop_time",
               "limit": "50"}
     endpoint = f"https://graph.facebook.com/{settings.meta_graph_api_version}/ads_archive?{urlencode(params)}"
     try:
