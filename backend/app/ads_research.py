@@ -103,7 +103,7 @@ def serialize(item: FacebookAdResearch) -> dict:
         "source": item.source, "ad_archive_id": item.ad_archive_id,
         "page_name": item.page_name, "ad_text": item.ad_text,
         "headline": item.headline, "description": item.description,
-        "creative_url": (f"/api/ads-research/ads/{item.id}/preview" if item.source == "meta_api" and item.creative_url else item.creative_url),
+        "creative_url": (f"https://autonomous-affiliate-platform.onrender.com/api/ads-research/ads/{item.id}/preview" if item.source == "meta_api" and item.creative_url else item.creative_url),
         "ad_library_url": (f"https://www.facebook.com/ads/library/?id={item.ad_archive_id}" if item.ad_archive_id else item.ad_library_url),
         "landing_page_url": item.landing_page_url, "started_running": item.started_running,
         "active_status": item.active_status, "platforms": _json(item.platforms, []),
@@ -192,8 +192,14 @@ def _upsert_meta_ad(ad: dict, query: str, market: str, db: Session) -> FacebookA
     row.ad_text = _text_list(bodies)
     row.headline = _text_list(titles)[:500]
     row.description = _text_list(descriptions)
-    row.creative_url = ad.get("ad_snapshot_url") or ""
-    row.ad_library_url = ad.get("ad_snapshot_url") or ""
+    snapshot_url = ad.get("ad_snapshot_url") or ""
+    # Never persist the Meta access token embedded in ad_snapshot_url.
+    if snapshot_url:
+        parts = urlsplit(snapshot_url)
+        safe_query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
+        snapshot_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(safe_query), ""))
+    row.creative_url = snapshot_url
+    row.ad_library_url = f"https://www.facebook.com/ads/library/?id={archive_id}"
     row.started_running = start
     row.active_status = "inactive" if stop else "active"
     row.platforms = json.dumps(ad.get("publisher_platforms") or [])
