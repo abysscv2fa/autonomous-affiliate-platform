@@ -1,9 +1,7 @@
 <script setup lang="ts">
-useHead({ title: 'Facebook Ads Research · AffPilot' })
+useHead({ title: 'AffPilot AdSpy · US Market' })
 const query = ref('')
 const country = ref('US')
-const mode = ref<'manual'|'auto'|'both'>('both')
-const activeOnly = ref(true)
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -20,21 +18,15 @@ const landingUrl = ref('')
 const analyzeBusy = ref<number|null>(null)
 const analysis = ref<any>(null)
 const route = useRoute()
-const countries = [{code:'US',name:'United States'},{code:'GB',name:'United Kingdom'},{code:'DE',name:'Germany'},{code:'FR',name:'France'},{code:'IT',name:'Italy'},{code:'ES',name:'Spain'},{code:'NL',name:'Netherlands'},{code:'SE',name:'Sweden'},{code:'CA',name:'Canada'},{code:'AU',name:'Australia'}]
+const countries = [{code:'US',name:'United States'}]
 async function loadSaved(){ try { saved.value = await $fetch<any[]>('/api/ads-research/ads?limit=100') } catch {} }
 async function search(){ if(query.value.trim().length<2)return; busy.value=true; error.value=''; notice.value=''; results.value=[]; analysis.value=null
  try {
-   const modes = mode.value==='both' ? ['manual','auto'] : [mode.value]
-   let autoResult:any=null
-   for (const m of modes) {
-     const r:any=await $fetch('/api/ads-research/search',{method:'POST',body:{query:query.value,country:country.value,mode:m,active_only:activeOnly.value}})
-     searchUrl.value=r.search_url || searchUrl.value
-     if(m==='auto'){ autoResult=r; results.value=r.results || []; if(r.message) notice.value=r.message }
-   }
+   const r:any=await $fetch('/api/ads-research/search',{method:'POST',body:{query:query.value,country:'US'}})
+   searchUrl.value=r.search_url || ''
+   notice.value=r.message || 'Meta Ad Library search is ready for the US market.'
    await loadSaved()
-   if(mode.value==='manual') notice.value='Đã tạo truy vấn. Mở Meta Ad Library để duyệt quảng cáo và lưu mẫu phù hợp vào AffPilot.'
-   else if(mode.value==='both' && !results.value.length) notice.value=(autoResult?.message || 'Không có dữ liệu API tự động cho lựa chọn này.')+' Chế độ thủ công vẫn sẵn sàng.'
- } catch(e:any){ error.value=e?.data?.detail || 'Không thể tìm kiếm Meta Ad Library.' }
+ } catch(e:any){ error.value=e?.data?.detail || 'Could not create Meta Ad Library search.' }
  finally{busy.value=false}
 }
 function selectResult(ad:any){ selected.value=ad; pageName.value=ad.page_name||''; adText.value=ad.ad_text||''; headline.value=ad.headline||''; description.value=ad.description||''; creativeUrl.value=ad.ad_library_url||''; landingUrl.value=''; analysis.value=null }
@@ -62,14 +54,12 @@ onMounted(()=>{
 
 <template>
   <main class="ads-shell">
-    <header class="top"><div><NuxtLink to="/" class="back">← AffPilot Command Center</NuxtLink><p class="eyebrow">AFFPILOT · MARKET INTELLIGENCE</p><h1>Facebook Ads Research</h1><p class="sub">Research quảng cáo công khai · phân tích creative · tìm cơ hội sản phẩm</p></div><span class="status">RESEARCH WORKSPACE</span></header>
+    <header class="top"><div><NuxtLink to="/" class="back">← AffPilot Command Center</NuxtLink><p class="eyebrow">AFFPILOT · MARKET INTELLIGENCE</p><h1>AffPilot AdSpy</h1><p class="sub">Public US ads · creative analysis · product opportunities</p></div><span class="status">US MARKET · COMPLIANT</span></header>
     <section class="panel">
-      <div class="panel-title"><div><h2>Discover ads</h2><p>Tìm theo từ khóa, sản phẩm, thương hiệu hoặc fanpage.</p></div><span class="tag">Manual + Auto</span></div>
+      <div class="panel-title"><div><h2>Discover US ads</h2><p>Search by keyword, product, brand, or advertiser on Meta Ad Library.</p></div><span class="tag">US · Public Ad Library</span></div>
       <form @submit.prevent="search">
         <label class="wide">Keyword<input v-model="query" placeholder="e.g. posture corrector, CRM software, pet accessories" minlength="2" required></label>
-        <label>Market<select v-model="country"><option v-for="c in countries" :key="c.code" :value="c.code">{{c.name}}</option></select></label>
-        <label>Research mode<select v-model="mode"><option value="both">Both · Manual + Auto</option><option value="manual">Manual only</option><option value="auto">Auto only</option></select></label>
-        <label class="check"><input v-model="activeOnly" type="checkbox"> Active ads only (API mode)</label>
+        <label>Market<input value="United States (US)" readonly></label>
         <button :disabled="busy">{{busy?'Researching…':'Search Ad Library'}}</button>
       </form>
       <p v-if="error" class="error">{{error}}</p><p v-if="notice" class="notice">{{notice}}</p>
@@ -79,7 +69,7 @@ onMounted(()=>{
       <div class="panel-title"><div><h2>API results</h2><p>Public records returned by Meta API; availability depends on country and Meta permissions.</p></div><span class="tag">{{results.length}} ads</span></div>
       <article v-for="ad in results" :key="ad.ad_archive_id" class="ad-row"><div><b>{{ad.page_name || 'Advertiser'}}</b><p>{{ad.ad_text || 'No ad copy returned'}}</p><small>{{ad.started_running || 'Start date unavailable'}} · {{(ad.platforms||[]).join(', ')}}</small><p v-if="ad.headline"><b>{{ad.headline}}</b></p></div><button class="secondary" @click="selectResult(ad)">Review / Save</button><a v-if="ad.ad_library_url" :href="ad.ad_library_url" target="_blank" rel="noopener">View ad ↗</a></article>
     </section>
-    <section class="panel" v-if="selected || mode==='manual' || mode==='both'">
+    <section class="panel">
       <div class="panel-title"><div><h2>Save an ad for AI analysis</h2><p>Paste public ad text or select an API result. Manual saves are labelled unverified until checked.</p></div></div>
       <div class="editor">
         <label>Advertiser / Page<input v-model="pageName" placeholder="Page name"></label>
@@ -92,7 +82,7 @@ onMounted(()=>{
       <button :disabled="adText.trim().length<5" @click="saveCurrent">Save ad & research</button>
     </section>
     <section class="panel">
-      <div class="panel-title"><div><h2>Saved research</h2><p>Ad records collected in your AffPilot database.</p></div><button class="secondary" @click="loadSaved">Refresh</button></div>
+      <div class="panel-title"><div><h2>Saved US research</h2><p>Ad records collected in your AffPilot database.</p></div><button class="secondary" @click="loadSaved">Refresh</button></div>
       <div v-if="!saved.length" class="empty">No saved ads yet. Search a keyword, then save a public ad to start.</div>
       <article v-for="ad in saved" :key="ad.id" class="saved-row"><div class="saved-copy"><b>{{ad.page_name || 'Advertiser not supplied'}}</b><span class="tag">{{ad.country}} · {{ad.evidence_label}}</span><p>{{ad.headline}}</p><p>{{ad.ad_text}}</p><small>Saved {{new Date(ad.created_at).toLocaleString()}} · AI score {{ad.opportunity_score || '—'}}</small></div><button :disabled="analyzeBusy===ad.id" @click="analyze(ad.id)">{{analyzeBusy===ad.id?'Analyzing…':'AI Analyze'}}</button><a v-if="ad.ad_library_url" :href="ad.ad_library_url" target="_blank" rel="noopener">Source ↗</a></article>
     </section>
