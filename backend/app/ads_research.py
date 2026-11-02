@@ -3,10 +3,11 @@ import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import String, Text, DateTime, Integer, select
 from sqlalchemy.orm import Mapped, mapped_column, Session
@@ -64,6 +65,7 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=100)
     market: str = Field(default="EU_UK", pattern="^(EU|UK|EU_UK)$")
     max_results: int = Field(default=200, ge=1, le=300)
+    media_type: str = Field(default="ALL", pattern="^(ALL|IMAGE|VIDEO|MEME|NONE)$")
 
 
 class SaveAdRequest(BaseModel):
@@ -225,6 +227,7 @@ def search_ads(payload: SearchRequest, db: Session = Depends(get_db)):
         "access_token": token,
         "ad_reached_countries": json.dumps(countries),
         "ad_type": "ALL",
+        "media_type": payload.media_type,
         "ad_active_status": "ALL",
         "ad_delivery_date_min": date_min,
         "search_terms": query,
@@ -323,6 +326,35 @@ def free_creative_analysis(item: FacebookAdResearch) -> dict:
         "score_type": "Heuristic creative completeness score, not ad performance",
         "analysis_provider": "local_rules_free",
     }
+
+
+@router.get("/ads/{ad_id}/preview")
+def preview_ad(ad_id: int, db: Session = Depends(get_db)):
+    """Proxy the individual Meta snapshot so the long-lived API token stays server-side."""
+    item = db.get(FacebookAdResearch, ad_id)
+    if not item or not item.creative_url:
+        raise HTTPException(404, "Meta ad snapshot is not available for this record")
+    token = (settings.meta_ad_library_access_token or "").strip()
+    if not token:
+        raise HTTPException(503, "Meta Ad Library API is not connected")
+    parts = urlsplit(item.creative_url)
+    if parts.scheme != "https" or not (parts.hostname or "").endswith(("facebook.com", "fb.com")):
+        raise HTTPException(400, "Invalid Meta snapshot URL")
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
+    query.append(("access_token", token))
+    snapshot_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+    request = UrlRequest(snapshot_url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0 AffPilot-AdSpy/1.0"})
+    try:
+        with urlopen(request, timeout=25) as upstream:
+            html = upstream.read(8_000_000)
+            return Response(
+                content=html, media_type="text/html",
+                headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+            )
+    except HTTPError as exc:
+        raise HTTPException(502, f"Meta snapshot returned HTTP {exc.code}")
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(502, f"Could not load Meta snapshot: {str(exc)[:200]}")
 
 
 @router.post("/ads/{ad_id}/analyze")
