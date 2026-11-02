@@ -82,7 +82,7 @@ def list_ads(limit: int = 100, db: Session = Depends(get_db)):
     return [serialize(row) for row in rows]
 
 @router.post("/search")
-def search_ads(payload: SearchRequest):
+def search_ads(payload: SearchRequest, db: Session = Depends(get_db)):
     country = payload.country.upper()
     url = library_url(payload.query, country)
     if payload.mode == "manual":
@@ -115,13 +115,27 @@ def search_ads(payload: SearchRequest):
             bodies = ad.get("ad_creative_bodies") or []
             titles = ad.get("ad_creative_link_titles") or []
             descriptions = ad.get("ad_creative_link_descriptions") or []
-            results.append({"ad_archive_id": ad.get("ad_archive_id") or ad.get("id") or "",
-                            "page_name": ad.get("page_name") or "", "ad_text": bodies[0] if bodies else "",
-                            "headline": titles[0] if titles else "", "description": descriptions[0] if descriptions else "",
-                            "ad_library_url": ad.get("ad_snapshot_url") or "", "started_running": ad.get("ad_delivery_start_time") or "",
-                            "active_status": "active" if not ad.get("ad_delivery_stop_time") else "inactive",
-                            "platforms": ad.get("publisher_platforms") or [], "source": "meta_ad_library_api",
-                            "evidence_label": "meta_api_public_data"})
+            record = {"ad_archive_id": ad.get("ad_archive_id") or ad.get("id") or "",
+                      "page_name": ad.get("page_name") or "", "ad_text": bodies[0] if bodies else "",
+                      "headline": titles[0] if titles else "", "description": descriptions[0] if descriptions else "",
+                      "ad_library_url": ad.get("ad_snapshot_url") or "", "started_running": ad.get("ad_delivery_start_time") or "",
+                      "active_status": "active" if not ad.get("ad_delivery_stop_time") else "inactive",
+                      "platforms": ad.get("publisher_platforms") or [], "source": "meta_ad_library_api",
+                      "evidence_label": "meta_api_public_data"}
+            archive_id = record["ad_archive_id"]
+            saved = db.scalar(select(FacebookAdResearch).where(FacebookAdResearch.ad_archive_id == archive_id)) if archive_id else None
+            if not saved:
+                saved = FacebookAdResearch(query=payload.query, country=country, source="meta_ad_library_api",
+                    ad_archive_id=archive_id, page_name=record["page_name"], ad_text=record["ad_text"],
+                    headline=record["headline"], description=record["description"],
+                    ad_library_url=record["ad_library_url"], started_running=record["started_running"],
+                    active_status=record["active_status"], platforms=json.dumps(record["platforms"]),
+                    evidence_label="meta_api_public_data")
+                db.add(saved)
+                db.flush()
+            record["id"] = saved.id
+            results.append(record)
+        db.commit()
         return {"mode": "auto", "provider": "meta_ad_library_api", "search_url": url,
                 "status": "ok", "count": len(results), "results": results,
                 "paging": payload_data.get("paging", {})}
