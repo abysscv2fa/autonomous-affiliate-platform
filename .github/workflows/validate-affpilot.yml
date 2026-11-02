@@ -28,3 +28,35 @@ jobs:
         run: npm install --no-audit --no-fund
       - working-directory: frontend
         run: npm run build
+
+  adspy-live-smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify live AdSpy search through the dashboard proxy
+        env:
+          DASHBOARD_URL: https://affpilot-dashboard.onrender.com
+        run: |
+          set -euo pipefail
+          payload='{"query":"affpilot integration smoke test","country":"US"}'
+          for attempt in $(seq 1 18); do
+            status="$(curl --silent --show-error --output /tmp/adspy-response.json --write-out '%{http_code}' --connect-timeout 10 --max-time 30 --request POST "$DASHBOARD_URL/api/ads-research/search" --header 'Content-Type: application/json' --data "$payload" || true)"
+            if [ "$status" = "200" ]; then
+              python - <<'PY'
+          import json
+          with open("/tmp/adspy-response.json", encoding="utf-8") as response_file:
+              data = json.load(response_file)
+          assert data.get("provider") == "meta_ad_library_web", data
+          assert data.get("market") == "US", data
+          assert data.get("search_url", "").startswith("https://www.facebook.com/ads/library/"), data
+          print("AdSpy production smoke test passed: HTTP 200 and valid public Meta Ad Library URL.")
+          PY
+              exit 0
+            fi
+            echo "AdSpy endpoint returned HTTP ${status:-network}; retry ${attempt}/18"
+            sleep 10
+          done
+          echo "AdSpy production smoke test failed. Last response:"
+          cat /tmp/adspy-response.json || true
+          exit 1
