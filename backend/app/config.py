@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     metricool_timezone: str = "Asia/Ho_Chi_Minh"
     facebook_page_id: str = ""
     facebook_page_access_token: str = ""
+    meta_ad_library_access_token: str = ""
+    meta_graph_api_version: str = "v22.0"
     threads_user_id: str = ""
     threads_access_token: str = ""
     instagram_user_id: str = ""
