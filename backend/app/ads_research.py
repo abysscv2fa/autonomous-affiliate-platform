@@ -44,6 +44,7 @@ class FacebookAdResearch(Base):
 class SearchRequest(BaseModel):
     query: str = Field(min_length=2, max_length=250)
     country: str = Field(default="US", min_length=2, max_length=2)
+    ad_type: str = Field(default="ALL", pattern="^(ALL|POLITICAL_AND_ISSUE_ADS)$")
 
 
 class SaveAdRequest(BaseModel):
@@ -61,11 +62,11 @@ class SaveAdRequest(BaseModel):
     platforms: list[str] = Field(default_factory=list, max_length=10)
 
 
-def library_url(query: str, country: str = "US") -> str:
+def library_url(query: str, country: str = "US", ad_type: str = "ALL") -> str:
     params = {
         "active_status": "active",
-        "ad_type": "ALL",
-        "country": "US",
+        "ad_type": ad_type if ad_type in {"ALL", "POLITICAL_AND_ISSUE_ADS"} else "ALL",
+        "country": country.upper() if len(country) == 2 else "US",
         "q": query,
         "search_type": "keyword_unordered",
     }
@@ -113,15 +114,16 @@ def list_ads(limit: int = 100, db: Session = Depends(get_db)):
 @router.post("/search")
 def search_ads(payload: SearchRequest):
     query = payload.query.strip()
-    url = library_url(query)
+    url = library_url(query, payload.country, payload.ad_type)
     return {
         "mode": "manual",
         "provider": "meta_ad_library_web",
-        "market": "US",
+        "market": payload.country.upper(),
+        "ad_type": payload.ad_type,
         "search_url": url,
         "results": [],
         "message": (
-            "US commercial ads are researched from the public Meta Ad Library. "
+            ("All active ads" if payload.ad_type == "ALL" else "Social issues, elections and politics ads") + " are searched in the public Meta Ad Library. "
             "Open the source, review an ad, and save only the public details you select. "
             "AffPilot does not scrape the page or claim private performance metrics."
         ),
