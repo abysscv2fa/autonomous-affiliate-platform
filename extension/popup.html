@@ -3,14 +3,6 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AffPilot AdSpy</title><link rel="stylesheet" href="popup.css"></head>
 <body>
   <header><div class="mark">A</div><div><h1>AffPilot AdSpy</h1><p>Facebook Ad Library research companion</p></div><span class="pill">0.1.0</span></header>
-  <section class="settings">
-    <details><summary>Connection settings</summary>
-      <label>AffPilot backend URL<input id="backend" type="url" placeholder="https://affiliate-backend-yfy6.onrender.com"></label>
-      <label>Autopilot token<input id="token" type="password" autocomplete="off" placeholder="Paste AUTOPILOT_TOKEN"></label>
-      <button id="saveSettings" class="secondary">Save connection</button>
-      <small>Token is stored in this browser's extension storage. Never share it. Do not paste your Meta password or Facebook session cookies.</small>
-    </details>
-  </section>
   <main>
     <div class="row"><label>Search keyword<input id="query" placeholder="e.g. dog bed, CRM, skincare"></label><label class="country">Country<select id="country"><option value="US">US</option><option value="GB">UK</option><option value="DE">DE</option><option value="FR">FR</option><option value="IT">IT</option><option value="ES">ES</option><option value="NL">NL</option><option value="SE">SE</option><option value="CA">CA</option><option value="AU">AU</option></select></label></div>
     <button id="openLibrary" class="primary">Open search in Meta Ad Library ↗</button>
