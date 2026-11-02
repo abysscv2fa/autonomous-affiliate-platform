@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     cloudflare_api_token: str = ""
     cloudflare_image_model: str = "@cf/black-forest-labs/flux-1-schnell"
     autopilot_token: str = ""
+    frontend_proxy_token: str = ""
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
