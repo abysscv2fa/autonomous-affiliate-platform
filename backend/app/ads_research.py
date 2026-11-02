@@ -103,7 +103,8 @@ def serialize(item: FacebookAdResearch) -> dict:
         "source": item.source, "ad_archive_id": item.ad_archive_id,
         "page_name": item.page_name, "ad_text": item.ad_text,
         "headline": item.headline, "description": item.description,
-        "creative_url": item.creative_url, "ad_library_url": item.ad_library_url,
+        "creative_url": (f"/api/ads-research/ads/{item.id}/preview" if item.source == "meta_api" and item.creative_url else item.creative_url),
+        "ad_library_url": (f"https://www.facebook.com/ads/library/?id={item.ad_archive_id}" if item.ad_archive_id else item.ad_library_url),
         "landing_page_url": item.landing_page_url, "started_running": item.started_running,
         "active_status": item.active_status, "platforms": _json(item.platforms, []),
         "eu_total_reach": item.eu_total_reach,
@@ -338,7 +339,7 @@ def preview_ad(ad_id: int, db: Session = Depends(get_db)):
     if not token:
         raise HTTPException(503, "Meta Ad Library API is not connected")
     parts = urlsplit(item.creative_url)
-    if parts.scheme != "https" or not (parts.hostname or "").endswith(("facebook.com", "fb.com")):
+    if parts.scheme != "https" or not ((parts.hostname or "") == "facebook.com" or (parts.hostname or "").endswith(".facebook.com")):
         raise HTTPException(400, "Invalid Meta snapshot URL")
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
     query.append(("access_token", token))
