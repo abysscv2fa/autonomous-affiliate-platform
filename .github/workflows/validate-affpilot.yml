@@ -1,0 +1,30 @@
+name: Validate AffPilot
+
+on:
+  pull_request:
+    branches: [main, feature/facebook-ads-research]
+  push:
+    branches: [main, feature/facebook-ads-research]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r backend/requirements.txt
+      - run: python -m compileall -q backend/app
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - working-directory: frontend
+        run: npm install --no-audit --no-fund
+      - working-directory: frontend
+        run: npm run build
