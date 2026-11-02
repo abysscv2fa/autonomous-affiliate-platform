@@ -17,6 +17,7 @@ from .db import Base, engine, get_db
 from .models import Campaign, ContentDraft, Conversion, ResearchOpportunity, ActivityLog, MediaAsset, AppSetting, AgentMessage
 from .schemas import CampaignCreate, CampaignOut, DraftCreate, DraftOut, ConversionCreate, OpportunityCreate, OpportunityOut
 from .research import score_opportunity, ai_research_brief
+from .ads_research import router as ads_research_router
 
 Base.metadata.create_all(bind=engine)
 # Backward-compatible column addition for existing deployments.
@@ -27,7 +28,8 @@ if 'image_url' not in {c['name'] for c in inspect(engine).get_columns('content_d
 def log_activity(db: Session, event_type: str, message: str, status: str = "success", details: dict | None = None):
     db.add(ActivityLog(event_type=event_type, message=message, status=status, details=json.dumps(details or {}, ensure_ascii=False)))
 
-app = FastAPI(title="Autonomous Affiliate Platform API", version="0.2.0")
+app = FastAPI(title="Autonomous Affiliate Platform API", version="0.3.0")
+app.include_router(ads_research_router)
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
