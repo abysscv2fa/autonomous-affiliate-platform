@@ -76,7 +76,7 @@ async def require_frontend_proxy_token(request: Request, call_next):
     # the dashboard's internal authentication header.
     is_public_meta_preview = (
         request.method == "GET"
-        and re.fullmatch(r"/api/ads-research/ads/\\d+/preview", request.url.path)
+        and re.fullmatch(r"/api/ads-research/ads/\d+/preview", request.url.path)
     )
     if request.method != "OPTIONS" and request.url.path.startswith("/api/") and not is_public_meta_preview:
         internal_header = request.headers.get("x-affpilot-internal-token")
