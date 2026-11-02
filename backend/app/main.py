@@ -1,5 +1,7 @@
 import json
 import secrets
+import hashlib
+import logging
 import base64
 from datetime import date, datetime, time, timedelta, timezone
 from pydantic import BaseModel, Field
@@ -33,25 +35,89 @@ app.include_router(ads_research_router)
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+_auth_log = logging.getLogger("uvicorn.error")
+
+
+def _norm_token(value: str | None) -> str:
+    """Normalize whitespace and accidental surrounding quotes in environment values."""
+    return (value or "").strip().strip("\\\"'").strip()
+
+
+def _token_fp(value: str) -> str:
+    """Short diagnostic fingerprint; never log the secret itself."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:8] if value else "-"
+
+
+settings.autopilot_token = _norm_token(settings.autopilot_token)
+settings.frontend_proxy_token = _norm_token(settings.frontend_proxy_token)
+
+
 @app.middleware("http")
 async def require_frontend_proxy_token(request: Request, call_next):
-    """Require the private token for every /api/* route.
+    """Authenticate Nuxt proxy and scheduled jobs with separate credentials.
 
-    Accepted headers (both must equal AUTOPILOT_TOKEN):
-    - x-affpilot-internal-token: sent by the Nuxt server proxy (value of BACKEND_API_TOKEN)
-    - x-autopilot-token: sent by scheduled jobs (scripts/daily_autopilot.py, GitHub Actions)
+    x-affpilot-internal-token: FRONTEND_PROXY_TOKEN (falls back to AUTOPILOT_TOKEN
+    only for legacy deployments where FRONTEND_PROXY_TOKEN is unset).
+    x-autopilot-token: AUTOPILOT_TOKEN, used by scheduled jobs / GitHub Actions.
     """
     if request.method != "OPTIONS" and request.url.path.startswith("/api/"):
-        internal_supplied = request.headers.get("x-affpilot-internal-token") or ""
-        scheduled_supplied = request.headers.get("x-autopilot-token") or ""
+        internal_header = request.headers.get("x-affpilot-internal-token")
+        scheduled_header = request.headers.get("x-autopilot-token")
+
+        # Ambiguous requests are rejected rather than allowing one credential
+        # to mask or substitute for the other.
+        if internal_header and scheduled_header:
+            _auth_log.warning(
+                "AUTH 401 %s %s header=BOTH via=%s",
+                request.method, request.url.path,
+                request.headers.get("x-affpilot-via", "-"),
+            )
+            return JSONResponse(status_code=401, content={"detail": "Send exactly one API authentication header."})
+
         internal_expected = settings.frontend_proxy_token or settings.autopilot_token
         scheduled_expected = settings.autopilot_token
+
         if not internal_expected and not scheduled_expected:
-            return JSONResponse(status_code=503, content={"detail": "API authentication is not configured on the backend."})
-        internal_ok = bool(internal_supplied and internal_expected and secrets.compare_digest(internal_supplied, internal_expected))
-        scheduled_ok = bool(scheduled_supplied and scheduled_expected and secrets.compare_digest(scheduled_supplied, scheduled_expected))
-        if not (internal_ok or scheduled_ok):
+            _auth_log.warning(
+                "AUTH 503 %s %s: no backend API token is configured",
+                request.method, request.url.path,
+            )
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "API authentication is not configured on the backend."},
+            )
+
+        if internal_header:
+            supplied = _norm_token(internal_header)
+            expected = internal_expected
+            header_name = "x-affpilot-internal-token"
+        elif scheduled_header:
+            supplied = _norm_token(scheduled_header)
+            expected = scheduled_expected
+            header_name = "x-autopilot-token"
+        else:
+            supplied = ""
+            expected = ""
+            header_name = "NONE"
+
+        authenticated = bool(
+            supplied and expected
+            and secrets.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+        )
+        if not authenticated:
+            _auth_log.warning(
+                "AUTH 401 %s %s header=%s via=%s supplied(len=%s fp=%s) expected(len=%s fp=%s)",
+                request.method,
+                request.url.path,
+                header_name,
+                request.headers.get("x-affpilot-via", "-"),
+                len(supplied),
+                _token_fp(supplied),
+                len(expected),
+                _token_fp(expected),
+            )
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+
     return await call_next(request)
 
 class PublishRequest(BaseModel):

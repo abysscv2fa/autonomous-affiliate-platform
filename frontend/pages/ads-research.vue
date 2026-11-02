@@ -26,7 +26,7 @@ async function search(){ if(query.value.trim().length<2)return; busy.value=true;
    searchUrl.value=r.search_url || ''
    notice.value=r.message || 'Meta Ad Library search is ready for the US market.'
    await loadSaved()
- } catch(e:any){ error.value=e?.data?.detail || 'Could not create Meta Ad Library search.' }
+ } catch(e:any){ const st=e?.statusCode||e?.response?.status||e?.status; error.value=e?.data?.detail || e?.data?.statusMessage || e?.statusMessage || ('Request failed ('+(st||'network')+'). Check BACKEND_API_BASE and BACKEND_API_TOKEN on the dashboard service, and that the backend is awake.') }
  finally{busy.value=false}
 }
 function selectResult(ad:any){ selected.value=ad; pageName.value=ad.page_name||''; adText.value=ad.ad_text||''; headline.value=ad.headline||''; description.value=ad.description||''; creativeUrl.value=ad.ad_library_url||''; landingUrl.value=''; analysis.value=null }
