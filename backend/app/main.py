@@ -33,11 +33,18 @@ app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True
 
 @app.middleware("http")
 async def require_frontend_proxy_token(request: Request, call_next):
-    """Require the private frontend-to-backend token for every API route."""
-    if request.url.path.startswith("/api/"):
+    """Require the private token for every /api/* route.
+
+    Accepted headers (both must equal AUTOPILOT_TOKEN):
+    - x-affpilot-internal-token: sent by the Nuxt server proxy (value of BACKEND_API_TOKEN)
+    - x-autopilot-token: sent by scheduled jobs (scripts/daily_autopilot.py, GitHub Actions)
+    """
+    if request.method != "OPTIONS" and request.url.path.startswith("/api/"):
         expected = settings.autopilot_token
-        supplied = request.headers.get("x-affpilot-internal-token", "")
-        if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+        if not expected:
+            return JSONResponse(status_code=503, content={"detail": "AUTOPILOT_TOKEN is not configured on the backend."})
+        supplied = request.headers.get("x-affpilot-internal-token") or request.headers.get("x-autopilot-token") or ""
+        if not supplied or not secrets.compare_digest(supplied, expected):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
