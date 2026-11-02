@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AffPilot AdSpy</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <header><div class="mark">A</div><div><h1>AffPilot AdSpy</h1><p>Facebook Ad Library research companion</p></div><span class="pill">0.1.0</span></header>
+  <section class="settings">
+    <details><summary>Connection settings</summary>
+      <label>AffPilot backend URL<input id="backend" type="url" placeholder="https://affiliate-backend-yfy6.onrender.com"></label>
+      <label>Autopilot token<input id="token" type="password" autocomplete="off" placeholder="Paste AUTOPILOT_TOKEN"></label>
+      <button id="saveSettings" class="secondary">Save connection</button>
+      <small>Token is stored in this browser's extension storage. Never share it. Do not paste your Meta password or Facebook session cookies.</small>
+    </details>
+  </section>
+  <main>
+    <div class="row"><label>Search keyword<input id="query" placeholder="e.g. dog bed, CRM, skincare"></label><label class="country">Country<select id="country"><option value="US">US</option><option value="GB">UK</option><option value="DE">DE</option><option value="FR">FR</option><option value="IT">IT</option><option value="ES">ES</option><option value="NL">NL</option><option value="SE">SE</option><option value="CA">CA</option><option value="AU">AU</option></select></label></div>
+    <button id="openLibrary" class="primary">Open search in Meta Ad Library ↗</button>
+    <div class="section-title"><b>Save an ad you selected</b><span id="tabStatus">Checking current tab…</span></div>
+    <label>Advertiser / Facebook Page<input id="pageName" placeholder="Advertiser name"></label>
+    <label>Ad copy<textarea id="adText" rows="5" placeholder="Paste the public ad text you want to research."></textarea></label>
+    <label>Headline<input id="headline" placeholder="Optional headline"></label>
+    <label>Description<textarea id="description" rows="2" placeholder="Optional description"></textarea></label>
+    <label>Ad Library source URL<input id="sourceUrl" type="url" placeholder="Auto-filled when current tab is Ad Library"></label>
+    <label>Landing page URL<input id="landingUrl" type="url" placeholder="Optional destination URL"></label>
+    <button id="saveAd" class="primary">Save ad to AffPilot</button>
+    <p id="message" role="status"></p>
+  </main>
+  <footer>Manual, user-directed capture only. This extension does not scrape pages, automate browsing, collect cookies, or bypass Meta access controls.</footer>
+  <script src="popup.js"></script>
+</body></html>
