@@ -19,7 +19,7 @@ el("openLibrary").addEventListener("click", async () => {
   const url = new URL("https://www.facebook.com/ads/library/");
   url.searchParams.set("active_status","active");
   url.searchParams.set("ad_type","ALL");
-  url.searchParams.set("country",el("country").value);
+  url.searchParams.set("country","US");
   url.searchParams.set("q",keyword);
   url.searchParams.set("search_type","keyword_unordered");
   await chrome.tabs.create({url:url.toString()});
@@ -34,7 +34,7 @@ el("openDashboard").addEventListener("click", async () => {
   }
   const params = new URLSearchParams({
     query:keyword,
-    country:el("country").value,
+    country:"US",
     page_name:el("pageName").value.trim(),
     ad_text:copy,
     headline:el("headline").value.trim(),
