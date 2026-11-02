@@ -51,6 +51,7 @@ onMounted(()=>{
   headline.value=imported.get('headline')||''
   description.value=imported.get('description')||''
   landingUrl.value=imported.get('landing_page_url')||''
+  creativeUrl.value=imported.get('creative_url')||''
   searchUrl.value=imported.get('ad_library_url')||''
   notice.value='Imported from AffPilot AdSpy extension. Review the details, then save to your research library.'
   window.history.replaceState(null,'',window.location.pathname+window.location.search)
