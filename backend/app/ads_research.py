@@ -1,8 +1,10 @@
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,7 +14,21 @@ from sqlalchemy.orm import Mapped, mapped_column, Session
 from .db import Base, get_db
 from .config import settings
 
-router = APIRouter(prefix="/api/ads-research", tags=["Facebook Ads Research"])
+router = APIRouter(prefix="/api/ads-research", tags=["Meta Ad Library Research"])
+
+EU_COUNTRIES = [
+    "AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR",
+    "DE", "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL",
+    "PL", "PT", "RO", "SK", "SI", "ES", "SE",
+]
+META_FIELDS = ",".join([
+    "id", "ad_creation_time", "ad_creative_bodies", "ad_creative_link_captions",
+    "ad_creative_link_descriptions", "ad_creative_link_titles",
+    "ad_delivery_start_time", "ad_delivery_stop_time", "ad_snapshot_url",
+    "page_id", "page_name", "publisher_platforms", "eu_total_reach",
+    "beneficiary_payers", "age_country_gender_reach_breakdown",
+    "target_ages", "target_gender", "target_locations", "languages",
+])
 
 
 class FacebookAdResearch(Base):
@@ -20,8 +36,8 @@ class FacebookAdResearch(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     query: Mapped[str] = mapped_column(String(250), default="")
-    country: Mapped[str] = mapped_column(String(2), default="US")
-    source: Mapped[str] = mapped_column(String(30), default="manual")
+    country: Mapped[str] = mapped_column(String(2), default="EU")
+    source: Mapped[str] = mapped_column(String(30), default="meta_api")
     ad_archive_id: Mapped[str] = mapped_column(String(160), default="", index=True)
     page_name: Mapped[str] = mapped_column(String(250), default="")
     ad_text: Mapped[str] = mapped_column(Text, default="")
@@ -33,23 +49,26 @@ class FacebookAdResearch(Base):
     started_running: Mapped[str] = mapped_column(String(40), default="")
     active_status: Mapped[str] = mapped_column(String(30), default="unknown")
     platforms: Mapped[str] = mapped_column(Text, default="[]")
+    eu_total_reach: Mapped[int] = mapped_column(Integer, default=0)
+    beneficiary_payers: Mapped[str] = mapped_column(Text, default="[]")
+    targeting_details: Mapped[str] = mapped_column(Text, default="{}")
     ai_analysis: Mapped[str] = mapped_column(Text, default="")
     opportunity_score: Mapped[int] = mapped_column(Integer, default=0)
-    evidence_label: Mapped[str] = mapped_column(String(60), default="user_saved_unverified")
+    evidence_label: Mapped[str] = mapped_column(String(60), default="meta_api")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
 
 class SearchRequest(BaseModel):
-    query: str = Field(min_length=2, max_length=250)
-    country: str = Field(default="US", min_length=2, max_length=2)
-    ad_type: str = Field(default="ALL", pattern="^(ALL|POLITICAL_AND_ISSUE_ADS)$")
+    query: str = Field(min_length=2, max_length=100)
+    market: str = Field(default="EU_UK", pattern="^(EU|UK|EU_UK)$")
+    max_results: int = Field(default=200, ge=1, le=300)
 
 
 class SaveAdRequest(BaseModel):
     query: str = Field(default="", max_length=250)
-    country: str = Field(default="US", min_length=2, max_length=2)
+    country: str = Field(default="EU", min_length=2, max_length=2)
     page_name: str = Field(default="", max_length=250)
     ad_text: str = Field(min_length=5, max_length=12000)
     headline: str = Field(default="", max_length=500)
@@ -62,85 +81,194 @@ class SaveAdRequest(BaseModel):
     platforms: list[str] = Field(default_factory=list, max_length=10)
 
 
-def library_url(query: str, country: str = "US", ad_type: str = "ALL") -> str:
-    params = {
-        "active_status": "active",
-        "ad_type": ad_type if ad_type in {"ALL", "POLITICAL_AND_ISSUE_ADS"} else "ALL",
-        "country": country.upper() if len(country) == 2 else "US",
-        "q": query,
-        "search_type": "keyword_unordered",
-    }
-    return "https://www.facebook.com/ads/library/?" + urlencode(params)
+def library_url(query: str, country: str = "GB") -> str:
+    return "https://www.facebook.com/ads/library/?" + urlencode({
+        "active_status": "all", "ad_type": "ALL", "country": country,
+        "q": query, "search_type": "keyword_unordered",
+    })
+
+
+def _json(value, fallback):
+    try:
+        return json.loads(value) if isinstance(value, str) else (value if value is not None else fallback)
+    except (TypeError, ValueError):
+        return fallback
 
 
 def serialize(item: FacebookAdResearch) -> dict:
-    try:
-        platforms = json.loads(item.platforms or "[]")
-    except (TypeError, ValueError):
-        platforms = []
     return {
-        "id": item.id,
-        "query": item.query,
-        "country": item.country,
-        "source": item.source,
-        "ad_archive_id": item.ad_archive_id,
-        "page_name": item.page_name,
-        "ad_text": item.ad_text,
-        "headline": item.headline,
-        "description": item.description,
-        "creative_url": item.creative_url,
-        "ad_library_url": item.ad_library_url,
-        "landing_page_url": item.landing_page_url,
-        "started_running": item.started_running,
-        "active_status": item.active_status,
-        "platforms": platforms,
-        "ai_analysis": item.ai_analysis,
+        "id": item.id, "query": item.query, "country": item.country,
+        "source": item.source, "ad_archive_id": item.ad_archive_id,
+        "page_name": item.page_name, "ad_text": item.ad_text,
+        "headline": item.headline, "description": item.description,
+        "creative_url": item.creative_url, "ad_library_url": item.ad_library_url,
+        "landing_page_url": item.landing_page_url, "started_running": item.started_running,
+        "active_status": item.active_status, "platforms": _json(item.platforms, []),
+        "eu_total_reach": item.eu_total_reach,
+        "beneficiary_payers": _json(item.beneficiary_payers, []),
+        "targeting_details": _json(item.targeting_details, {}),
+        "ai_analysis": _json(item.ai_analysis, {}),
         "opportunity_score": item.opportunity_score,
         "evidence_label": item.evidence_label,
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
 
 
+@router.get("/status")
+def ads_api_status():
+    return {
+        "provider": "Meta Ad Library API",
+        "connected": bool(settings.meta_ad_library_access_token.strip()),
+        "graph_api_version": settings.meta_graph_api_version,
+        "supported_markets": ["EU", "UK", "EU_UK"],
+        "lookback_days": 365,
+    }
+
+
 @router.get("/ads")
-def list_ads(limit: int = 100, db: Session = Depends(get_db)):
-    rows = db.scalars(
-        select(FacebookAdResearch)
-        .order_by(FacebookAdResearch.created_at.desc())
-        .limit(max(1, min(limit, 200)))
-    ).all()
+def list_ads(limit: int = 100, market: str | None = None, db: Session = Depends(get_db)):
+    stmt = select(FacebookAdResearch).order_by(FacebookAdResearch.created_at.desc())
+    if market == "EU":
+        stmt = stmt.where(FacebookAdResearch.country == "EU")
+    elif market == "UK":
+        stmt = stmt.where(FacebookAdResearch.country == "GB")
+    rows = db.scalars(stmt.limit(max(1, min(limit, 300)))).all()
     return [serialize(row) for row in rows]
 
 
+def _meta_get(url: str) -> dict:
+    request = UrlRequest(url, headers={"Accept": "application/json", "User-Agent": "AffPilot-AdSpy/1.0"})
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        try:
+            detail = json.loads(raw).get("error", {}).get("message", raw[:500])
+        except (ValueError, AttributeError):
+            detail = raw[:500]
+        raise HTTPException(status_code=502, detail=f"Meta Graph API returned HTTP {exc.code}: {detail}")
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(status_code=502, detail=f"Could not reach Meta Graph API: {str(exc)[:250]}")
+
+
+def _meta_countries(market: str) -> list[str]:
+    if market == "UK":
+        return ["GB"]
+    if market == "EU":
+        return EU_COUNTRIES
+    return EU_COUNTRIES + ["GB"]
+
+
+def _text_list(value) -> str:
+    if isinstance(value, list):
+        return "\n".join(str(x) for x in value if x)
+    return str(value or "")
+
+
+def _upsert_meta_ad(ad: dict, query: str, market: str, db: Session) -> FacebookAdResearch:
+    archive_id = str(ad.get("id") or "")
+    if not archive_id:
+        return None
+    row = db.scalar(select(FacebookAdResearch).where(
+        FacebookAdResearch.ad_archive_id == archive_id
+    ).limit(1))
+    if row is None:
+        row = FacebookAdResearch(ad_archive_id=archive_id)
+        db.add(row)
+    start = ad.get("ad_delivery_start_time") or ""
+    stop = ad.get("ad_delivery_stop_time") or ""
+    bodies = ad.get("ad_creative_bodies") or []
+    titles = ad.get("ad_creative_link_titles") or []
+    descriptions = ad.get("ad_creative_link_descriptions") or []
+    reach = ad.get("eu_total_reach")
+    row.query = query
+    row.country = "GB" if market == "UK" else "EU"
+    row.source = "meta_api"
+    row.page_name = (ad.get("page_name") or "")[:250]
+    row.ad_text = _text_list(bodies)
+    row.headline = _text_list(titles)[:500]
+    row.description = _text_list(descriptions)
+    row.creative_url = ad.get("ad_snapshot_url") or ""
+    row.ad_library_url = ad.get("ad_snapshot_url") or ""
+    row.started_running = start
+    row.active_status = "inactive" if stop else "active"
+    row.platforms = json.dumps(ad.get("publisher_platforms") or [])
+    row.eu_total_reach = int(reach) if str(reach or "").isdigit() else 0
+    row.beneficiary_payers = json.dumps(ad.get("beneficiary_payers") or [], ensure_ascii=False)
+    row.targeting_details = json.dumps({
+        "target_ages": ad.get("target_ages"),
+        "target_gender": ad.get("target_gender"),
+        "target_locations": ad.get("target_locations"),
+        "age_country_gender_reach_breakdown": ad.get("age_country_gender_reach_breakdown"),
+        "languages": ad.get("languages"),
+        "page_id": ad.get("page_id"),
+        "ad_creation_time": ad.get("ad_creation_time"),
+    }, ensure_ascii=False)
+    row.evidence_label = "official_meta_ad_library_api"
+    return row
+
+
 @router.post("/search")
-def search_ads(payload: SearchRequest):
+def search_ads(payload: SearchRequest, db: Session = Depends(get_db)):
+    token = (settings.meta_ad_library_access_token or "").strip()
+    if not token:
+        raise HTTPException(
+            status_code=503,
+            detail="Meta Ad Library API chưa được kết nối. Hoàn tất xác minh tài khoản Meta, tạo Developer App và thêm META_AD_LIBRARY_ACCESS_TOKEN trên Render.",
+        )
     query = payload.query.strip()
-    url = library_url(query, payload.country, payload.ad_type)
+    countries = _meta_countries(payload.market)
+    today = datetime.now(timezone.utc).date()
+    date_min = (today - timedelta(days=365)).isoformat()
+    params = {
+        "access_token": token,
+        "ad_reached_countries": json.dumps(countries),
+        "ad_type": "ALL",
+        "ad_active_status": "ALL",
+        "ad_delivery_date_min": date_min,
+        "search_terms": query,
+        "search_type": "KEYWORD_UNORDERED",
+        "fields": META_FIELDS,
+        "limit": min(100, payload.max_results),
+    }
+    version = (settings.meta_graph_api_version or "v22.0").strip()
+    url = f"https://graph.facebook.com/{version}/ads_archive?{urlencode(params)}"
+    collected = []
+    pages = 0
+    while url and len(collected) < payload.max_results and pages < 3:
+        response = _meta_get(url)
+        data = response.get("data") or []
+        for ad in data:
+            row = _upsert_meta_ad(ad, query, payload.market, db)
+            if row is not None:
+                collected.append(row)
+        pages += 1
+        url = (response.get("paging") or {}).get("next")
+    db.commit()
+    for row in collected:
+        db.refresh(row)
     return {
-        "mode": "manual",
-        "provider": "meta_ad_library_web",
-        "market": payload.country.upper(),
-        "ad_type": payload.ad_type,
-        "search_url": url,
-        "results": [],
-        "message": (
-            ("All active ads" if payload.ad_type == "ALL" else "Social issues, elections and politics ads") + " are searched in the public Meta Ad Library. "
-            "Open the source, review an ad, and save only the public details you select. "
-            "AffPilot does not scrape the page or claim private performance metrics."
-        ),
+        "mode": "api",
+        "provider": "meta_ad_library_api",
+        "market": payload.market,
+        "countries": countries,
+        "query": query,
+        "lookback_days": 365,
+        "count": len(collected),
+        "pages_fetched": pages,
+        "results": [serialize(row) for row in collected],
+        "message": f"Meta API returned {len(collected)} ads for {payload.market}. Results were saved to the AffPilot research library.",
     }
 
 
 @router.post("/ads", status_code=201)
 def save_ad(payload: SaveAdRequest, db: Session = Depends(get_db)):
     item = FacebookAdResearch(
-        query=payload.query.strip(),
-        country="US",
-        source="manual",
-        page_name=payload.page_name.strip(),
-        ad_text=payload.ad_text.strip(),
-        headline=payload.headline.strip(),
-        description=payload.description.strip(),
-        creative_url=payload.creative_url.strip(),
+        query=payload.query.strip(), country=payload.country.upper(),
+        source="manual", page_name=payload.page_name.strip(),
+        ad_text=payload.ad_text.strip(), headline=payload.headline.strip(),
+        description=payload.description.strip(), creative_url=payload.creative_url.strip(),
         ad_library_url=payload.ad_library_url.strip() or library_url(
             payload.query.strip() or payload.ad_text[:80]
         ),
@@ -168,31 +296,21 @@ def free_creative_analysis(item: FacebookAdResearch) -> dict:
     first_line = sentences[0] if sentences else text[:220]
     cta_terms = [w for w in ("shop", "learn", "discover", "get", "try", "start", "claim", "order", "join", "download") if re.search(rf"\b{w}\b", text, re.I)]
     offer_terms = [w for w in ("free", "discount", "save", "off", "bonus", "trial", "guarantee", "limited") if re.search(rf"\b{w}\b", text, re.I)]
-    score = 35
-    if item.headline:
-        score += 10
-    if len(text) >= 120:
-        score += 10
-    if cta_terms:
-        score += 10
-    if offer_terms:
-        score += 10
-    if item.landing_page_url:
-        score += 5
-    if item.creative_url or item.ad_library_url:
-        score += 5
-    score = min(score, 85)
+    score = 35 + (10 if item.headline else 0) + (10 if len(text) >= 120 else 0)
+    score += (10 if cta_terms else 0) + (10 if offer_terms else 0)
+    score += 5 if item.landing_page_url else 0
+    score += 5 if item.creative_url or item.ad_library_url else 0
     return {
-        "summary": "Rule-based review of the user-saved public ad copy; no external AI service was called.",
+        "summary": "Rule-based review of public ad creative; no external AI service was called.",
         "target_audience": "Hypothesis only: infer the likely audience from the product, problem, and wording; verify against the landing page.",
         "pain_point": "Review the first sentence and repeated product/problem terms for the main customer pain point.",
         "hook": first_line[:300],
         "offer": "Detected offer language: " + (", ".join(offer_terms) if offer_terms else "No explicit offer term detected."),
         "creative_strategy": "Inspect the original Ad Library creative. This text-only record cannot establish visual strategy.",
-        "funnel_hypothesis": "Hypothesis only: ad click → landing page → product or lead conversion. Confirm each step from the supplied destination URL.",
+        "funnel_hypothesis": "Hypothesis only: ad click → landing page → product or lead conversion.",
         "risks": [
             "Ad Library presence does not prove profitability, conversion volume, or return on ad spend.",
-            "Manual records are user-saved and have not been independently verified by Meta API.",
+            "EU reach is an estimate supplied by Meta, not advertiser spend or sales.",
         ],
         "test_ideas": [
             "Test a problem-led hook against a benefit-led hook.",
@@ -201,7 +319,7 @@ def free_creative_analysis(item: FacebookAdResearch) -> dict:
         ],
         "recurring_terms": [word for word, _ in common],
         "detected_cta_terms": cta_terms,
-        "opportunity_score": score,
+        "opportunity_score": min(score, 85),
         "score_type": "Heuristic creative completeness score, not ad performance",
         "analysis_provider": "local_rules_free",
     }
@@ -212,42 +330,31 @@ def analyze_ad(ad_id: int, db: Session = Depends(get_db)):
     item = db.get(FacebookAdResearch, ad_id)
     if not item:
         raise HTTPException(404, "Ad research record not found")
-
     data = None
     if settings.openai_api_key:
         try:
             from openai import OpenAI
-
             client = OpenAI(api_key=settings.openai_api_key)
             response = client.chat.completions.create(
-                model=settings.openai_model,
-                temperature=0.25,
+                model=settings.openai_model, temperature=0.25,
                 response_format={"type": "json_object"},
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Analyze the supplied user-saved public ad creative. Return JSON with "
-                            "summary, target_audience, pain_point, hook, offer, creative_strategy, "
-                            "funnel_hypothesis, risks, test_ideas (array), opportunity_score (integer 0-100). "
-                            "Mark all inferences as hypotheses. Never claim spend, ROAS, conversions, "
-                            "profitability, or winning status from ad-library presence or run time. "
-                            "Score creative research attractiveness, not verified ad performance."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps({
-                            "page": item.page_name,
-                            "copy": item.ad_text,
-                            "headline": item.headline,
-                            "description": item.description,
-                            "country": "US",
-                            "started_running": item.started_running,
-                            "platforms": json.loads(item.platforms or "[]"),
-                            "landing_page_url": item.landing_page_url,
-                        }, ensure_ascii=False),
-                    },
+                    {"role": "system", "content": (
+                        "Analyze the supplied public ad creative. Return JSON with summary, target_audience, "
+                        "pain_point, hook, offer, creative_strategy, funnel_hypothesis, risks, test_ideas (array), "
+                        "opportunity_score (integer 0-100). Mark inferences as hypotheses. Never claim spend, "
+                        "ROAS, conversions, or profitability from ad-library presence or run time."
+                    )},
+                    {"role": "user", "content": json.dumps({
+                        "page": item.page_name, "copy": item.ad_text, "headline": item.headline,
+                        "description": item.description, "country": item.country,
+                        "started_running": item.started_running,
+                        "platforms": _json(item.platforms, []),
+                        "landing_page_url": item.landing_page_url,
+                        "eu_total_reach": item.eu_total_reach,
+                        "beneficiary_payers": _json(item.beneficiary_payers, []),
+                        "targeting_details": _json(item.targeting_details, {}),
+                    }, ensure_ascii=False)},
                 ],
             )
             data = json.loads(response.choices[0].message.content or "{}")
@@ -255,16 +362,10 @@ def analyze_ad(ad_id: int, db: Session = Depends(get_db)):
             data["score_type"] = "AI creative opportunity estimate, not ad performance"
         except Exception:
             data = None
-
     if data is None:
         data = free_creative_analysis(item)
-
     item.ai_analysis = json.dumps(data, ensure_ascii=False)
     item.opportunity_score = max(0, min(100, int(data.get("opportunity_score", 0))))
     db.commit()
-    return {
-        "id": item.id,
-        "analysis": data,
-        "opportunity_score": item.opportunity_score,
-        "score_type": data.get("score_type", "Creative research estimate, not ad performance"),
-    }
+    return {"id": item.id, "analysis": data, "opportunity_score": item.opportunity_score,
+            "score_type": data.get("score_type", "Creative research estimate, not ad performance")}
