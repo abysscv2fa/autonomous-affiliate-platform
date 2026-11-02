@@ -1,5 +1,9 @@
 export default defineNuxtConfig({
-  devtools: { enabled: true },
-  runtimeConfig: { public: { apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8000' } },
+  devtools: { enabled: false },
+  runtimeConfig: {
+    backendApiBase: process.env.BACKEND_API_BASE || '',
+    backendApiToken: process.env.BACKEND_API_TOKEN || '',
+    public: { apiBase: '' }
+  },
   app: { head: { title: 'Autonomous Affiliate Platform' } }
 })
