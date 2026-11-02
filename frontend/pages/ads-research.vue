@@ -2,6 +2,7 @@
 useHead({ title: 'AffPilot AdSpy · US Market' })
 const query = ref('')
 const country = ref('US')
+const adType = ref('ALL')
 const busy = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -22,7 +23,7 @@ const countries = [{code:'US',name:'United States'}]
 async function loadSaved(){ try { saved.value = await $fetch<any[]>('/api/ads-research/ads?limit=100') } catch {} }
 async function search(){ if(query.value.trim().length<2)return; busy.value=true; error.value=''; notice.value=''; results.value=[]; analysis.value=null
  try {
-   const r:any=await $fetch('/api/ads-research/search',{method:'POST',body:{query:query.value,country:'US'}})
+   const r:any=await $fetch('/api/ads-research/search',{method:'POST',body:{query:query.value,country:'US',ad_type:adType.value}})
    searchUrl.value=r.search_url || ''
    notice.value=r.message || 'Meta Ad Library search is ready for the US market.'
    await loadSaved()
@@ -60,6 +61,7 @@ onMounted(()=>{
       <form @submit.prevent="search">
         <label class="wide">Keyword<input v-model="query" placeholder="e.g. posture corrector, CRM software, pet accessories" minlength="2" required></label>
         <label>Market<input value="United States (US)" readonly></label>
+        <label>Ad category<select v-model="adType"><option value="ALL">All ads (default)</option><option value="POLITICAL_AND_ISSUE_ADS">Social issues, elections & politics</option></select></label>
         <button :disabled="busy">{{busy?'Researching…':'Search Ad Library'}}</button>
       </form>
       <p v-if="error" class="error">{{error}}</p><p v-if="notice" class="notice">{{notice}}</p>
