@@ -6,7 +6,7 @@ export default defineEventHandler((event) => {
     throw createError({ statusCode: 503, statusMessage: 'Backend proxy is not configured.' })
   }
   const incoming = getRequestURL(event)
-  const target = `${String(config.backendApiBase).replace(/\\/$/, '')}${incoming.pathname}${incoming.search}`
+  const target = `${String(config.backendApiBase).replace(/\/$/, '')}${incoming.pathname}${incoming.search}`
   setRequestHeader(event, 'x-affpilot-internal-token', String(config.backendApiToken))
   return proxyRequest(event, target)
 })
