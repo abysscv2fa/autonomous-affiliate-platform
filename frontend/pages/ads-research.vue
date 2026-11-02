@@ -37,7 +37,7 @@ onMounted(()=>{
  if(params.import==='manual'){
   const imported = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash)
   query.value=imported.get('query')||''
-  country.value=imported.get('country')||'US'
+  country.value='US'
   pageName.value=imported.get('page_name')||''
   adText.value=imported.get('ad_text')||''
   headline.value=imported.get('headline')||''
