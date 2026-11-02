@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const config = useRuntimeConfig()
-const api = config.public.apiBase
+const api = '' // luôn gọi qua proxy cùng origin (server/api/[...].ts), không gọi thẳng backend
 const { data: stats, refresh } = await useFetch<any>(`${api}/api/dashboard`, { default: () => ({ campaigns: 0, content_drafts: 0, confirmed_commission: 0, currency: 'USD' }) })
 const { data: campaigns, refresh: refreshCampaigns } = await useFetch<any[]>(`${api}/api/campaigns`, { default: () => [] })
 const { data: opportunities, refresh: refreshOpportunities } = await useFetch<any[]>(`${api}/api/research/opportunities`, { default: () => [] })
