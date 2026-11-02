@@ -2,7 +2,7 @@ name: Validate AffPilot
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/facebook-ads-research]
   push:
     branches: [main, feature/facebook-ads-research]
 
