@@ -1,7 +1,7 @@
 # AffPilot AdSpy Chrome Extension (MVP 0.1)
 
 ## What it does
-- Opens a keyword + country search in Meta's public Ad Library.
+- Opens a keyword search in Meta's public Ad Library, fixed to the United States market.
 - Detects whether the current tab URL is an Ad Library URL and offers it as the source link.
 - Lets the user explicitly paste public ad copy and enter advertiser/headline/landing-page details.
 - Opens the existing AffPilot Ad Research dashboard with those user-submitted fields prefilled. The user reviews and saves the record through AffPilot's normal authenticated frontend.
@@ -19,7 +19,7 @@ Meta's Automated Data Collection Terms require express written permission before
 2. Open Chrome and visit `chrome://extensions`.
 3. Enable **Developer mode**.
 4. Select **Load unpacked** and choose this `extension` directory.
-5. Open the extension, enter a keyword and country, and choose **Open search in Meta Ad Library**.
+5. Open the extension, enter a keyword (US market), and choose **Open search in Meta Ad Library**.
 6. Review the public ads yourself. Copy the ad text and enter the visible advertiser/headline/source URL in the extension.
 7. Choose **Send to AdSpy Dashboard**. AffPilot opens with the fields prefilled; review them and press **Save ad & research**.
 
