@@ -1,4 +1,5 @@
 import json
+import re
 import secrets
 import hashlib
 import logging
@@ -69,7 +70,15 @@ async def require_frontend_proxy_token(request: Request, call_next):
     only for legacy deployments where FRONTEND_PROXY_TOKEN is unset).
     x-autopilot-token: AUTOPILOT_TOKEN, used by scheduled jobs / GitHub Actions.
     """
-    if request.method != "OPTIONS" and request.url.path.startswith("/api/"):
+    # Meta Ad Library snapshot is public creative content. The endpoint still
+    # keeps the Meta access token server-side and validates the stored snapshot host.
+    # Exempt only this read-only preview route because browser iframes cannot attach
+    # the dashboard's internal authentication header.
+    is_public_meta_preview = (
+        request.method == "GET"
+        and re.fullmatch(r"/api/ads-research/ads/\\d+/preview", request.url.path)
+    )
+    if request.method != "OPTIONS" and request.url.path.startswith("/api/") and not is_public_meta_preview:
         internal_header = request.headers.get("x-affpilot-internal-token")
         scheduled_header = request.headers.get("x-autopilot-token")
 
