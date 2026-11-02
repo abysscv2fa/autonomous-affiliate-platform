@@ -43,15 +43,17 @@ async function analyze(id:number){analyzeBusy.value=id;error.value='';try{const 
 onMounted(()=>{
  const params=route.query
  if(params.import==='manual'){
-  query.value=String(params.query||'')
-  country.value=String(params.country||'US')
-  pageName.value=String(params.page_name||'')
-  adText.value=String(params.ad_text||'')
-  headline.value=String(params.headline||'')
-  description.value=String(params.description||'')
-  landingUrl.value=String(params.landing_page_url||'')
-  searchUrl.value=String(params.ad_library_url||'')
+  const imported = new URLSearchParams(window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash)
+  query.value=imported.get('query')||''
+  country.value=imported.get('country')||'US'
+  pageName.value=imported.get('page_name')||''
+  adText.value=imported.get('ad_text')||''
+  headline.value=imported.get('headline')||''
+  description.value=imported.get('description')||''
+  landingUrl.value=imported.get('landing_page_url')||''
+  searchUrl.value=imported.get('ad_library_url')||''
   notice.value='Imported from AffPilot AdSpy extension. Review the details, then save to your research library.'
+  window.history.replaceState(null,'',window.location.pathname+window.location.search)
  }
  loadSaved()
 })
