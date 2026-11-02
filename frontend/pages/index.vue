@@ -27,22 +27,37 @@ async function startAgentDiscussion() {
     const imageBrief = [...(meeting.messages || [])].reverse().find((m:any)=>m.agent === 'Image Agent')?.message || ''
     const result:any = await $fetch(`${api}/api/autopilot/run`, { method:'POST', body:{ topic:collaborationTopic.value, agent_brief:approvedBrief } })
     const imageErrors:string[] = []
-    for (const d of (result.drafts || [])) {
-      try {
-        await $fetch(`${api}/api/media/generate`, { method:'POST', body:{
-          draft_id:d.id,
-          prompt:`Create a premium, photorealistic editorial campaign image for this affiliate post. Follow this visual direction agreed by the Image Agent: ${imageBrief.slice(0,650)}. Title: ${d.title}. Context: ${String(d.body || '').slice(0,500)}. Audience: small business owners, creators and online entrepreneurs. Square 1:1 composition. No text, logos or watermarks.`
-        }})
-      } catch (e:any) { imageErrors.push(`#${d.id}`) }
+    let imagesCreated = 0
+    if (autoGenerateImages.value) {
+      for (const d of (result.drafts || [])) {
+        try {
+          await $fetch(`${api}/api/media/generate`, { method:'POST', body:{
+            draft_id:d.id,
+            prompt:`Create a premium, photorealistic editorial campaign image for this affiliate post. Follow this visual direction agreed by the Image Agent: ${imageBrief.slice(0,650)}. Title: ${d.title}. Context: ${String(d.body || '').slice(0,500)}. Audience: small business owners, creators and online entrepreneurs. Square 1:1 composition. No text, logos or watermarks.`
+          }})
+          imagesCreated++
+        } catch (e:any) { imageErrors.push(`#${d.id}`) }
+      }
     }
-    autopilotMessage.value = `Content Agent đã tạo ${result.created} bản nháp. Image Agent đã xử lý ${(result.drafts || []).length - imageErrors.length}/${(result.drafts || []).length} ảnh. Tất cả được lưu để bạn duyệt; không tự đăng.`
+    autopilotMessage.value = `Content Agent đã tạo ${result.created} bản nháp. ${autoGenerateImages.value ? `Image Agent đã tạo ${imagesCreated}/${(result.drafts || []).length} ảnh.` : 'Đã bỏ qua tạo ảnh theo cài đặt.'} Tất cả được lưu để bạn duyệt; không tự đăng.`
     if (imageErrors.length) autopilotMessage.value += ` Lỗi tạo ảnh ở bản nháp ${imageErrors.join(', ')}; có thể thử tạo lại trong từng bản nháp.`
     await Promise.all([refresh(),loadDrafts(),loadMedia(),loadActivity()])
   } catch(e:any) {
     collaborationError.value = e?.data?.detail || 'Quy trình hai Agent chưa hoàn tất. Kiểm tra OpenAI và Cloudinary.'
   } finally { collaborationBusy.value=false; autopilotBusy.value=false }
 }
-async function runImageAgent() { imageAgentBusy.value=true; imageAgentMessage.value=''; try { const r:any=await $fetch(`${api}/api/media/generate-daily`,{method:'POST'}); imageAgentMessage.value=r?.message || r?.status || 'Image Agent đã hoàn tất lượt chạy.'; await Promise.all([loadDrafts(),loadMedia(),loadActivity()]) } catch(e:any) { imageAgentMessage.value=e?.data?.detail || 'Image Agent chưa thể chạy. Kiểm tra cấu hình AI và bản nháp hôm nay.' } finally { imageAgentBusy.value=false } }
+async function runImageAgent() {
+  const draft = selectedDraft.value || drafts.value[0]
+  if (!draft) { imageAgentMessage.value = 'Hãy tạo hoặc chọn một bản nháp trước khi yêu cầu Image Agent.'; return }
+  imageAgentBusy.value = true; imageAgentMessage.value = ''
+  try {
+    await generateDraftImage(draft)
+    imageAgentMessage.value = mediaMessage.value || 'Image Agent đã tạo ảnh cho bản nháp.'
+    await Promise.all([loadDrafts(), loadMedia(), loadActivity()])
+  } catch (e:any) {
+    imageAgentMessage.value = e?.data?.detail || 'Image Agent chưa thể tạo ảnh. Kiểm tra OpenAI và Cloudinary.'
+  } finally { imageAgentBusy.value = false }
+}
 const autopilotBusy = ref(false), autopilotMessage = ref('')
 const drafts = ref<any[]>([])
 const selectedDraftId = ref<number | null>(null), selectedMediaId = ref<number | null>(null), draftImageMessage = ref('')
