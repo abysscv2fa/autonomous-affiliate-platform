@@ -39,6 +39,7 @@ el("openDashboard").addEventListener("click", async () => {
     ad_text:copy,
     headline:el("headline").value.trim(),
     description:el("description").value.trim(),
+    creative_url:el("creativeUrl").value.trim(),
     ad_library_url:el("sourceUrl").value.trim() || activeUrl,
     landing_page_url:el("landingUrl").value.trim()
   });
