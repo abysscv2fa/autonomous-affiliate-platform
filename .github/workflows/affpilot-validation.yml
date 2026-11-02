@@ -1,0 +1,36 @@
+name: AffPilot validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feat/affpilot-agent-production-drafts]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile backend modules
+        run: python -m compileall -q backend/app
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm install --no-audit --no-fund
+      - name: Build Nuxt frontend
+        working-directory: frontend
+        run: npm run build
