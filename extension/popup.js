@@ -33,7 +33,6 @@ el("openDashboard").addEventListener("click", async () => {
     return;
   }
   const params = new URLSearchParams({
-    import:"manual",
     query:keyword,
     country:el("country").value,
     page_name:el("pageName").value.trim(),
@@ -43,7 +42,7 @@ el("openDashboard").addEventListener("click", async () => {
     ad_library_url:el("sourceUrl").value.trim() || activeUrl,
     landing_page_url:el("landingUrl").value.trim()
   });
-  await chrome.tabs.create({url:"https://affiliate-frontend-qhop.onrender.com/ads-research?"+params.toString()});
+  await chrome.tabs.create({url:"https://affiliate-frontend-qhop.onrender.com/ads-research?import=manual#"+params.toString()});
   el("message").textContent = "Opened AffPilot AdSpy. Review the imported details and save from the dashboard.";
 });
 init().catch(() => { el("tabStatus").textContent = "Could not inspect active tab"; });
