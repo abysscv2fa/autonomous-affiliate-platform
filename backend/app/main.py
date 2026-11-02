@@ -7,7 +7,8 @@ from urllib.request import Request, urlopen
 from urllib.parse import urlencode, quote
 from zoneinfo import ZoneInfo
 from sqlalchemy import inspect, text
-from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
@@ -29,6 +30,16 @@ def log_activity(db: Session, event_type: str, message: str, status: str = "succ
 app = FastAPI(title="Autonomous Affiliate Platform API", version="0.2.0")
 origins = [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+@app.middleware("http")
+async def require_frontend_proxy_token(request: Request, call_next):
+    """Require the private frontend-to-backend token for every API route."""
+    if request.url.path.startswith("/api/"):
+        expected = settings.autopilot_token
+        supplied = request.headers.get("x-affpilot-internal-token", "")
+        if not expected or not supplied or not secrets.compare_digest(supplied, expected):
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return await call_next(request)
 
 class PublishRequest(BaseModel):
     date_time: str = Field(min_length=16, max_length=19)
