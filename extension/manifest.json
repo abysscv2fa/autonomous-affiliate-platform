@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "AffPilot AdSpy",
+  "version": "0.1.0",
+  "description": "Save user-selected public Facebook Ad Library examples to your AffPilot research workspace.",
+  "minimum_chrome_version": "116",
+  "action": {
+    "default_title": "Save to AffPilot AdSpy",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "activeTab"
+  ]
+}
