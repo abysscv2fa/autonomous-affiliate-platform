@@ -42,11 +42,15 @@ async def require_frontend_proxy_token(request: Request, call_next):
     - x-autopilot-token: sent by scheduled jobs (scripts/daily_autopilot.py, GitHub Actions)
     """
     if request.method != "OPTIONS" and request.url.path.startswith("/api/"):
-        expected = settings.autopilot_token
-        if not expected:
-            return JSONResponse(status_code=503, content={"detail": "AUTOPILOT_TOKEN is not configured on the backend."})
-        supplied = request.headers.get("x-affpilot-internal-token") or request.headers.get("x-autopilot-token") or ""
-        if not supplied or not secrets.compare_digest(supplied, expected):
+        internal_supplied = request.headers.get("x-affpilot-internal-token") or ""
+        scheduled_supplied = request.headers.get("x-autopilot-token") or ""
+        internal_expected = settings.frontend_proxy_token or settings.autopilot_token
+        scheduled_expected = settings.autopilot_token
+        if not internal_expected and not scheduled_expected:
+            return JSONResponse(status_code=503, content={"detail": "API authentication is not configured on the backend."})
+        internal_ok = bool(internal_supplied and internal_expected and secrets.compare_digest(internal_supplied, internal_expected))
+        scheduled_ok = bool(scheduled_supplied and scheduled_expected and secrets.compare_digest(scheduled_supplied, scheduled_expected))
+        if not (internal_ok or scheduled_ok):
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
     return await call_next(request)
 
