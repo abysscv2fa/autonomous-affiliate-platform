@@ -282,6 +282,8 @@ async def upload_media(file: UploadFile = File(...), db: Session = Depends(get_d
 @app.post("/api/media/generate-daily")
 def generate_daily_media(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
     """Daily Image Agent: create one campaign-matched image and save it to Cloudinary."""
+    if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
+        raise HTTPException(401, "Unauthorized")
     agent_setting = db.get(AppSetting, "auto_generate_images")
     if agent_setting and agent_setting.value.lower() != "true":
         return {"status": "paused", "message": "Daily Image Agent đang tắt."}
