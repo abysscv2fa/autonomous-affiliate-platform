@@ -30,6 +30,7 @@ async function search(){ if(query.value.trim().length<2)return; busy.value=true;
      searchUrl.value=r.search_url || searchUrl.value
      if(m==='auto'){ autoResult=r; results.value=r.results || []; if(r.message) notice.value=r.message }
    }
+   await loadSaved()
    if(mode.value==='manual') notice.value='Đã tạo truy vấn. Mở Meta Ad Library để duyệt quảng cáo và lưu mẫu phù hợp vào AffPilot.'
    else if(mode.value==='both' && !results.value.length) notice.value=(autoResult?.message || 'Không có dữ liệu API tự động cho lựa chọn này.')+' Chế độ thủ công vẫn sẵn sàng.'
  } catch(e:any){ error.value=e?.data?.detail || 'Không thể tìm kiếm Meta Ad Library.' }
