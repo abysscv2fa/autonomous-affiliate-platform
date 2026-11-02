@@ -26,6 +26,15 @@ Base.metadata.create_all(bind=engine)
 if 'image_url' not in {c['name'] for c in inspect(engine).get_columns('content_drafts')}:
     with engine.begin() as conn:
         conn.execute(text('ALTER TABLE content_drafts ADD COLUMN image_url VARCHAR(1500)'))
+# Backward-compatible AdSpy metadata additions for existing databases.
+_ads_columns = {c['name'] for c in inspect(engine).get_columns('facebook_ad_research')}
+with engine.begin() as conn:
+    if 'eu_total_reach' not in _ads_columns:
+        conn.execute(text('ALTER TABLE facebook_ad_research ADD COLUMN eu_total_reach INTEGER DEFAULT 0'))
+    if 'beneficiary_payers' not in _ads_columns:
+        conn.execute(text("ALTER TABLE facebook_ad_research ADD COLUMN beneficiary_payers TEXT DEFAULT '[]'"))
+    if 'targeting_details' not in _ads_columns:
+        conn.execute(text("ALTER TABLE facebook_ad_research ADD COLUMN targeting_details TEXT DEFAULT '{}'"))
 
 def log_activity(db: Session, event_type: str, message: str, status: str = "success", details: dict | None = None):
     db.add(ActivityLog(event_type=event_type, message=message, status=status, details=json.dumps(details or {}, ensure_ascii=False)))
