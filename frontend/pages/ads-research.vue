@@ -2,7 +2,7 @@
 useHead({ title: 'Facebook Ads Research · AffPilot' })
 const query = ref('')
 const country = ref('US')
-const mode = ref<'manual'|'auto'>('both' as any)
+const mode = ref<'manual'|'auto'|'both'>('both')
 const activeOnly = ref(true)
 const busy = ref(false)
 const error = ref('')
@@ -36,7 +36,7 @@ async function search(){ if(query.value.trim().length<2)return; busy.value=true;
  finally{busy.value=false}
 }
 function selectResult(ad:any){ selected.value=ad; pageName.value=ad.page_name||''; adText.value=ad.ad_text||''; headline.value=ad.headline||''; description.value=ad.description||''; creativeUrl.value=ad.ad_library_url||''; landingUrl.value=''; analysis.value=null }
-async function saveCurrent(){ if(!adText.value.trim())return; try{ await $fetch('/api/ads-research/ads',{method:'POST',body:{query:query.value,country:country.value,page_name:pageName.value,ad_text:adText.value,headline:headline.value,description:description.value,creative_url:creativeUrl.value,ad_library_url:selected.value?.ad_library_url||searchUrl.value,landing_page_url:landingUrl.value}}); notice.value='Đã lưu quảng cáo vào Ad Research Library.'; selected.value=null; await loadSaved() }catch(e:any){error.value=e?.data?.detail||'Không thể lưu quảng cáo.'}}
+async function saveCurrent(){ if(!adText.value.trim())return; try{ await $fetch('/api/ads-research/ads',{method:'POST',body:{query:query.value,country:country.value,page_name:pageName.value,ad_text:adText.value,headline:headline.value,description:description.value,creative_url:creativeUrl.value,ad_library_url:selected.value?.ad_library_url||searchUrl.value,landing_page_url:landingUrl.value,source:selected.value?.source||'manual',ad_archive_id:selected.value?.ad_archive_id||'',started_running:selected.value?.started_running||'',active_status:selected.value?.active_status||'unknown',platforms:selected.value?.platforms||[],evidence_label:selected.value?.evidence_label||'user_saved_unverified'}}); notice.value='Đã lưu quảng cáo vào Ad Research Library.'; selected.value=null; await loadSaved() }catch(e:any){error.value=e?.data?.detail||'Không thể lưu quảng cáo.'}}
 async function analyze(id:number){analyzeBusy.value=id;error.value='';try{const r:any=await $fetch('/api/ads-research/ads/'+id+'/analyze',{method:'POST'});analysis.value=r.analysis;await loadSaved()}catch(e:any){error.value=e?.data?.detail||'AI không thể phân tích quảng cáo.'}finally{analyzeBusy.value=null}}
 onMounted(loadSaved)
 </script>
