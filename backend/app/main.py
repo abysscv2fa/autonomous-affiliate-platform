@@ -56,6 +56,47 @@ class AutopilotRunRequest(BaseModel):
     topic: str = Field(default="Affiliate content ideas", min_length=3, max_length=500)
     agent_brief: str = Field(default="", max_length=10000)
 
+
+
+def generate_cloudflare_image(prompt: str) -> bytes:
+    """Generate an image with Cloudflare Workers AI FLUX.1 schnell."""
+    if not settings.cloudflare_account_id or not settings.cloudflare_api_token:
+        raise HTTPException(503, "Thiếu CLOUDFLARE_ACCOUNT_ID hoặc CLOUDFLARE_API_TOKEN.")
+    if not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
+        raise HTTPException(503, "Cloudinary chưa được cấu hình.")
+    model = settings.cloudflare_image_model
+    endpoint = f"https://api.cloudflare.com/client/v4/accounts/{settings.cloudflare_account_id}/ai/run/{quote(model, safe='@/-')}"
+    payload = json.dumps({"prompt": prompt[:2048], "steps": 4}).encode("utf-8")
+    req = Request(endpoint, data=payload, method="POST", headers={
+        "Authorization": f"Bearer {settings.cloudflare_api_token}",
+        "Content-Type": "application/json", "Accept": "application/json"
+    })
+    try:
+        with urlopen(req, timeout=180) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        encoded = (result.get("result") or {}).get("image")
+        if not encoded:
+            raise RuntimeError("Cloudflare Workers AI returned no image data")
+        return base64.b64decode(encoded, validate=True)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = getattr(exc, "read", lambda: b"")()
+        reason = detail.decode("utf-8", "ignore")[:350] if detail else str(exc)[:350]
+        raise RuntimeError(f"Cloudflare Workers AI image generation failed: {reason}") from exc
+
+
+def save_generated_image(db: Session, image_bytes: bytes, filename: str, folder: str, draft: ContentDraft | None = None):
+    import cloudinary
+    import cloudinary.uploader
+    cloudinary.config(cloud_name=settings.cloudinary_cloud_name, api_key=settings.cloudinary_api_key, api_secret=settings.cloudinary_api_secret, secure=True)
+    uploaded = cloudinary.uploader.upload(image_bytes, resource_type="image", folder=folder, format="png")
+    asset = MediaAsset(public_id=uploaded["public_id"], secure_url=uploaded["secure_url"], filename=filename, format="png", bytes=uploaded.get("bytes", len(image_bytes)), width=uploaded.get("width", 1024), height=uploaded.get("height", 1024))
+    db.add(asset)
+    if draft:
+        draft.image_url = uploaded["secure_url"]
+    return asset, uploaded
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "affiliate-api"}
@@ -292,118 +333,57 @@ async def upload_media(file: UploadFile = File(...), db: Session = Depends(get_d
 
 @app.post("/api/media/generate-daily")
 def generate_daily_media(db: Session = Depends(get_db), x_autopilot_token: str | None = Header(default=None)):
-    """Daily Image Agent: create one campaign-matched image and save it to Cloudinary."""
+    """Generate one draft-matched image with Cloudflare Workers AI and save it to Cloudinary."""
     if not settings.autopilot_token or not x_autopilot_token or not secrets.compare_digest(x_autopilot_token, settings.autopilot_token):
         raise HTTPException(401, "Unauthorized")
     agent_setting = db.get(AppSetting, "auto_generate_images")
     if agent_setting and agent_setting.value.lower() != "true":
-        return {"status": "paused", "message": "Daily Image Agent đang tắt."}
-    if not settings.openai_api_key or not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
-        raise HTTPException(503, "Image Agent cần OPENAI_API_KEY và Cloudinary credentials.")
+        return {"status": "paused", "message": "Image Agent đang tắt."}
     campaign = db.scalar(select(Campaign).where(Campaign.name == "SaaS Tools for Small Businesses"))
     if not campaign:
         raise HTTPException(409, "Chưa có chiến dịch SaaS starter.")
-    today = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date().isoformat()
-    daily_drafts = list(db.scalars(
-        select(ContentDraft).where(
-            ContentDraft.campaign_id == campaign.id,
-            ContentDraft.status == "draft"
-        ).order_by(ContentDraft.created_at.asc()).limit(100)
-    ).all())
-    draft = next((item for item in daily_drafts if not item.image_url), None)
+    drafts = list(db.scalars(select(ContentDraft).where(ContentDraft.campaign_id == campaign.id, ContentDraft.status == "draft").order_by(ContentDraft.created_at.asc()).limit(100)).all())
+    draft = next((item for item in drafts if not item.image_url), None)
     if not draft:
-        return {"status": "already_ready", "message": "Hôm nay chưa có bài cần tạo ảnh hoặc ảnh đã sẵn sàng."}
+        return {"status": "already_ready", "message": "Không có bản nháp nào đang chờ ảnh."}
+    prompt = ("Create a premium, photorealistic editorial campaign image for an English-language small-business SaaS affiliate article. "
+              "No text, typography, logos, UI screenshots, watermarks, or brand marks. Use a clear visual metaphor, authentic people and setting, refined composition, natural cinematic lighting, and a cohesive modern color palette. "
+              f"Article title: {draft.title}. Article context: {(draft.body or '')[:1000]}")
     try:
-        from openai import OpenAI
-        import cloudinary
-        import cloudinary.uploader
-        client = OpenAI(api_key=settings.openai_api_key)
-        brief = client.chat.completions.create(
-            model=settings.openai_model,
-            temperature=0.7,
-            messages=[
-                {"role": "system", "content": "You are a senior commercial art director. Return only one detailed image-generation prompt in English. Create a realistic, premium social-media campaign photograph that visually explains the article. No text, typography, logos, UI screenshots, watermarks, or brand marks. Specify subject, setting, composition, lighting, color palette, and camera style. Avoid generic stock-photo clichés."},
-                {"role": "user", "content": f"Campaign niche: {campaign.niche}. Article title: {draft.title}. Article content: {draft.body[:3500]}"}
-            ],
-        )
-        image_prompt = brief.choices[0].message.content or ""
-        if len(image_prompt.strip()) < 30:
-            raise RuntimeError("Image Agent did not return a usable prompt")
-        generated = client.images.generate(
-            model=settings.openai_image_model,
-            prompt=image_prompt,
-            size="1024x1024",
-            quality=settings.openai_image_quality,
-            n=1,
-        )
-        image_b64 = generated.data[0].b64_json
-        if not image_b64:
-            raise RuntimeError("Image provider returned no image data")
-        image_bytes = base64.b64decode(image_b64)
-        cloudinary.config(cloud_name=settings.cloudinary_cloud_name, api_key=settings.cloudinary_api_key, api_secret=settings.cloudinary_api_secret, secure=True)
-        uploaded = cloudinary.uploader.upload(image_bytes, resource_type="image", folder="affiliate-command-center/generated/daily", format="png")
-        asset = MediaAsset(
-            public_id=uploaded["public_id"], secure_url=uploaded["secure_url"],
-            filename=f"daily-agent-{today}.png", format="png",
-            bytes=uploaded.get("bytes", len(image_bytes)),
-            width=uploaded.get("width", 1024), height=uploaded.get("height", 1024)
-        )
-        db.add(asset)
-        draft.image_url = uploaded["secure_url"]
-        log_activity(db, "media.daily_agent", f"Image Agent tạo ảnh và lưu kho cho bài #{draft.id}",
-                     details={"draft_id": draft.id, "public_id": uploaded["public_id"], "model": settings.openai_image_model, "prompt": image_prompt[:1200]})
-        db.commit()
-        db.refresh(asset)
-        return {"status": "generated", "draft_id": draft.id, "title": draft.title, "asset_id": asset.id, "url": asset.secure_url, "public_id": asset.public_id}
+        image_bytes = generate_cloudflare_image(prompt)
+        asset, uploaded = save_generated_image(db, image_bytes, f"affpilot-draft-{draft.id}.png", "affiliate-command-center/generated/daily", draft)
+        log_activity(db, "media.daily_agent", f"Cloudflare Image Agent đã tạo và lưu ảnh cho bản nháp #{draft.id}", details={"draft_id": draft.id, "public_id": uploaded["public_id"], "provider": "cloudflare_workers_ai", "model": settings.cloudflare_image_model, "asset_id": asset.id})
+        db.commit(); db.refresh(asset)
+        return {"status": "generated", "draft_id": draft.id, "title": draft.title, "asset_id": asset.id, "url": asset.secure_url, "public_id": asset.public_id, "provider": "cloudflare_workers_ai"}
     except Exception as exc:
-        log_activity(db, "media.daily_agent_failed", "Daily Image Agent tạo ảnh thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:400]})
+        db.rollback()
+        log_activity(db, "media.daily_agent_failed", "Cloudflare Image Agent tạo ảnh thất bại", "failed", {"draft_id": draft.id, "error": str(exc)[:400]})
         db.commit()
-        raise HTTPException(502, "Daily Image Agent không tạo được ảnh. Kiểm tra API key, quyền model và hạn mức.") from exc
+        raise HTTPException(502, "Cloudflare Image Agent không tạo được ảnh. Kiểm tra Workers AI token, hạn mức và Cloudinary.") from exc
 
 
 @app.post("/api/media/generate")
 def generate_media(payload: GenerateImageRequest, db: Session = Depends(get_db)):
-    """Generate one editorial image with OpenAI and persist it in Cloudinary."""
-    if not settings.openai_api_key:
-        raise HTTPException(503, "Chưa cấu hình OPENAI_API_KEY để tạo ảnh AI.")
-    if not settings.cloudinary_cloud_name or not settings.cloudinary_api_key or not settings.cloudinary_api_secret:
-        raise HTTPException(503, "Cloudinary chưa được cấu hình.")
+    """Generate one image with Cloudflare Workers AI and persist it in Cloudinary."""
     draft = db.get(ContentDraft, payload.draft_id) if payload.draft_id else None
     if payload.draft_id and not draft:
         raise HTTPException(404, "Không tìm thấy bản nháp.")
+    prompt = ("Create a polished, photorealistic commercial social-media image. No text, logos, or watermark. "
+              "Use clear visual hierarchy, natural lighting and a professional composition. " + payload.prompt)
     try:
-        from openai import OpenAI
-        import cloudinary
-        import cloudinary.uploader
-        client = OpenAI(api_key=settings.openai_api_key)
-        result = client.images.generate(
-            model=settings.openai_image_model,
-            prompt=("Create a polished, photorealistic commercial social-media image. No text, no logos, no watermark. "
-                    "Use clear visual hierarchy, natural lighting and a professional composition. " + payload.prompt),
-            size="1024x1024",
-            quality=settings.openai_image_quality,
-            n=1,
-        )
-        image_b64 = result.data[0].b64_json
-        if not image_b64:
-            raise RuntimeError("Image provider returned no image data")
-        image_bytes = base64.b64decode(image_b64)
-        cloudinary.config(cloud_name=settings.cloudinary_cloud_name, api_key=settings.cloudinary_api_key, api_secret=settings.cloudinary_api_secret, secure=True)
-        uploaded = cloudinary.uploader.upload(image_bytes, resource_type="image", folder="affiliate-command-center/generated", format="png")
-        asset = MediaAsset(public_id=uploaded["public_id"], secure_url=uploaded["secure_url"], filename="ai-generated.png", format="png", bytes=uploaded.get("bytes", len(image_bytes)), width=uploaded.get("width", 1024), height=uploaded.get("height", 1024))
-        db.add(asset)
-        if draft:
-            draft.image_url = uploaded["secure_url"]
-        log_activity(db, "media.generate", f"AI tạo ảnh và lưu Cloudinary" + (f" cho bản nháp #{draft.id}" if draft else ""), details={"public_id": uploaded["public_id"], "draft_id": draft.id if draft else None, "model": settings.openai_image_model})
-        db.commit()
-        db.refresh(asset)
-        return {"id": asset.id, "url": asset.secure_url, "public_id": asset.public_id, "draft_id": draft.id if draft else None}
+        image_bytes = generate_cloudflare_image(prompt)
+        asset, uploaded = save_generated_image(db, image_bytes, "affpilot-generated.png", "affiliate-command-center/generated", draft)
+        log_activity(db, "media.generate", "Cloudflare AI tạo ảnh và lưu Cloudinary" + (f" cho bản nháp #{draft.id}" if draft else ""), details={"public_id": uploaded["public_id"], "draft_id": draft.id if draft else None, "provider": "cloudflare_workers_ai", "model": settings.cloudflare_image_model})
+        db.commit(); db.refresh(asset)
+        return {"id": asset.id, "url": asset.secure_url, "public_id": asset.public_id, "draft_id": draft.id if draft else None, "provider": "cloudflare_workers_ai"}
     except HTTPException:
+        db.rollback()
         raise
     except Exception as exc:
-        log_activity(db, "media.generate", "Tạo ảnh AI thất bại", "failed", {"error": str(exc)[:300]})
+        db.rollback()
+        log_activity(db, "media.generate", "Cloudflare AI tạo ảnh thất bại", "failed", {"error": str(exc)[:300]})
         db.commit()
-        raise HTTPException(502, "Không thể tạo ảnh AI. Kiểm tra API key, quyền truy cập model và hạn mức tài khoản.") from exc
+        raise HTTPException(502, "Không thể tạo ảnh bằng Cloudflare Workers AI. Kiểm tra token, hạn mức và Cloudinary.") from exc
 
 
 @app.post("/api/autopilot/publish-latest-image")
