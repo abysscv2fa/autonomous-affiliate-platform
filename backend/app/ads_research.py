@@ -52,6 +52,12 @@ class SaveAdRequest(BaseModel):
     creative_url: str = Field(default="", max_length=1500)
     ad_library_url: str = Field(default="", max_length=1500)
     landing_page_url: str = Field(default="", max_length=1500)
+    source: str = Field(default="manual", pattern="^(manual|meta_ad_library_api)$")
+    ad_archive_id: str = Field(default="", max_length=160)
+    started_running: str = Field(default="", max_length=40)
+    active_status: str = Field(default="unknown", max_length=30)
+    platforms: list[str] = Field(default_factory=list, max_length=10)
+    evidence_label: str = Field(default="user_saved_unverified", max_length=60)
 
 def library_url(query: str, country: str) -> str:
     params = {"active_status": "active", "ad_type": "ALL", "country": country.upper(), "q": query, "search_type": "keyword_unordered"}
@@ -131,7 +137,7 @@ def save_ad(payload: SaveAdRequest, db: Session = Depends(get_db)):
         page_name=payload.page_name, ad_text=payload.ad_text, headline=payload.headline,
         description=payload.description, creative_url=payload.creative_url,
         ad_library_url=payload.ad_library_url or library_url(payload.query or payload.ad_text[:80], payload.country),
-        landing_page_url=payload.landing_page_url, evidence_label="user_saved_unverified")
+        landing_page_url=payload.landing_page_url, source=payload.source, ad_archive_id=payload.ad_archive_id,\n        started_running=payload.started_running, active_status=payload.active_status, platforms=json.dumps(payload.platforms),\n        evidence_label=payload.evidence_label if payload.source == "meta_ad_library_api" else "user_saved_unverified")
     db.add(item)
     db.commit()
     db.refresh(item)
