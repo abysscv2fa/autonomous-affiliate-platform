@@ -19,6 +19,7 @@ const creativeUrl = ref('')
 const landingUrl = ref('')
 const analyzeBusy = ref<number|null>(null)
 const analysis = ref<any>(null)
+const route = useRoute()
 const countries = [{code:'US',name:'United States'},{code:'GB',name:'United Kingdom'},{code:'DE',name:'Germany'},{code:'FR',name:'France'},{code:'IT',name:'Italy'},{code:'ES',name:'Spain'},{code:'NL',name:'Netherlands'},{code:'SE',name:'Sweden'},{code:'CA',name:'Canada'},{code:'AU',name:'Australia'}]
 async function loadSaved(){ try { saved.value = await $fetch<any[]>('/api/ads-research/ads?limit=100') } catch {} }
 async function search(){ if(query.value.trim().length<2)return; busy.value=true; error.value=''; notice.value=''; results.value=[]; analysis.value=null
@@ -39,7 +40,21 @@ async function search(){ if(query.value.trim().length<2)return; busy.value=true;
 function selectResult(ad:any){ selected.value=ad; pageName.value=ad.page_name||''; adText.value=ad.ad_text||''; headline.value=ad.headline||''; description.value=ad.description||''; creativeUrl.value=ad.ad_library_url||''; landingUrl.value=''; analysis.value=null }
 async function saveCurrent(){ if(!adText.value.trim())return; try{ await $fetch('/api/ads-research/ads',{method:'POST',body:{query:query.value,country:country.value,page_name:pageName.value,ad_text:adText.value,headline:headline.value,description:description.value,creative_url:creativeUrl.value,ad_library_url:selected.value?.ad_library_url||searchUrl.value,landing_page_url:landingUrl.value,source:selected.value?.source||'manual',ad_archive_id:selected.value?.ad_archive_id||'',started_running:selected.value?.started_running||'',active_status:selected.value?.active_status||'unknown',platforms:selected.value?.platforms||[],evidence_label:selected.value?.evidence_label||'user_saved_unverified'}}); notice.value='Đã lưu quảng cáo vào Ad Research Library.'; selected.value=null; await loadSaved() }catch(e:any){error.value=e?.data?.detail||'Không thể lưu quảng cáo.'}}
 async function analyze(id:number){analyzeBusy.value=id;error.value='';try{const r:any=await $fetch('/api/ads-research/ads/'+id+'/analyze',{method:'POST'});analysis.value=r.analysis;await loadSaved()}catch(e:any){error.value=e?.data?.detail||'AI không thể phân tích quảng cáo.'}finally{analyzeBusy.value=null}}
-onMounted(loadSaved)
+onMounted(()=>{
+ const params=route.query
+ if(params.import==='manual'){
+  query.value=String(params.query||'')
+  country.value=String(params.country||'US')
+  pageName.value=String(params.page_name||'')
+  adText.value=String(params.ad_text||'')
+  headline.value=String(params.headline||'')
+  description.value=String(params.description||'')
+  landingUrl.value=String(params.landing_page_url||'')
+  searchUrl.value=String(params.ad_library_url||'')
+  notice.value='Imported from AffPilot AdSpy extension. Review the details, then save to your research library.'
+ }
+ loadSaved()
+})
 </script>
 
 <template>
