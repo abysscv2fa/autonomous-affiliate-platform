@@ -8,6 +8,7 @@
     "default_title": "Save to AffPilot AdSpy",
     "default_popup": "popup.html"
   },
-  "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://affiliate-backend-yfy6.onrender.com/*"]
+  "permissions": [
+    "activeTab"
+  ]
 }
