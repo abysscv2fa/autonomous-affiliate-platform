@@ -16,7 +16,6 @@ const apiStatus = ref<any>(null)
 const route = useRoute()
 const previewSrc = computed(() => {
   if (!selected.value) return ''
-  if (selected.value.source === 'meta_api' && selected.value.id) return '/api/ads-research/ads/' + selected.value.id + '/preview'
   return selected.value.creative_url || ''
 })
 const isMetaSnapshot = computed(() => selected.value?.source === 'meta_api' && !!previewSrc.value)
@@ -132,7 +131,7 @@ onMounted(()=>{
         <section class="panel preview-panel" v-if="selected">
           <div class="section-head"><div><h2>Creative preview</h2><p>{{selected.page_name||'Advertiser'}} · {{selected.country}} · {{selected.ad_archive_id||'Saved note'}}</p></div><span class="preview-badge">LIVE PREVIEW</span></div>
           <div v-if="previewSrc" class="creative-frame">
-            <iframe :src="previewSrc" title="Meta Ad Library creative preview" loading="lazy" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+            <iframe :src="previewSrc" title="Meta Ad Library creative preview" loading="lazy" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
           </div>
           <div v-else class="no-preview"><div class="no-preview-icon">▧</div><b>Visual preview unavailable</b><p>This record does not include a Meta snapshot. Open the original source to inspect it.</p></div>
           <div class="creative-actions">
