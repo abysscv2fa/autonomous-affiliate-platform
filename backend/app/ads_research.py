@@ -391,7 +391,7 @@ def _extract_snapshot_media(html: str) -> dict:
     }
     for target, keys in patterns.items():
         for key in keys:
-            pattern = r"""["']""" + re.escape(key) + r"""["']\\s*:\\s*["']((?:\\\\.|[^"\\\\])*)["']"""
+            pattern = r"""["']""" + re.escape(key) + r"""["']\s*:\s*["']([^"']+)["']"""
             for match in re.finditer(pattern, html):
                 raw = match.group(1)
                 try:
