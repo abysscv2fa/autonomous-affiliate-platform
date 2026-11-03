@@ -391,7 +391,7 @@ def _extract_snapshot_media(html: str) -> dict:
     }
     for target, keys in patterns.items():
         for key in keys:
-            pattern = r'["\\']' + re.escape(key) + r'["\\']\\s*:\\s*["\\']((?:\\\\.|[^"\\\\])*)["\\']'
+            pattern = r"""["']""" + re.escape(key) + r"""["']\\s*:\\s*["']((?:\\\\.|[^"\\\\])*)["']"""
             for match in re.finditer(pattern, html):
                 raw = match.group(1)
                 try:
@@ -405,7 +405,7 @@ def _extract_snapshot_media(html: str) -> dict:
                     safe_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(clean_query), ""))
                     if safe_url not in found[target]:
                         found[target].append(safe_url)
-    poster_match = re.search(r'<meta[^>]+(?:property|name)=["\\']og:image["\\'][^>]+content=["\\']([^"\\']+)', html, re.I)
+    poster_match = re.search(r"""<meta[^>]+(?:property|name)=["']og:image["'][^>]+content=["']([^"']+)""", html, re.I)
     if poster_match:
         value = poster_match.group(1).replace("&amp;", "&")
         parts = urlsplit(value)
