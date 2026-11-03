@@ -14,11 +14,20 @@ const analyzeBusy = ref<number|null>(null)
 const analysis = ref<any>(null)
 const apiStatus = ref<any>(null)
 const route = useRoute()
-const previewSrc = computed(() => {
-  if (!selected.value) return ''
-  return selected.value.creative_url || ''
-})
+const previewMedia = ref<any>(null)
+const previewBusy = ref(false)
+const previewSrc = computed(() => selected.value?.creative_url || '')
 const isMetaSnapshot = computed(() => selected.value?.source === 'meta_api' && !!previewSrc.value)
+async function loadPreviewMedia(ad:any){
+  previewMedia.value = null
+  if (!ad?.id || ad.source !== 'meta_api') return
+  previewBusy.value = true
+  try {
+    previewMedia.value = await $fetch<any>('/api/ads-research/ads/'+ad.id+'/media')
+  } catch(e:any) {
+    previewMedia.value = {images:[],videos:[],message:e?.data?.detail || 'Could not extract media from Meta snapshot.'}
+  } finally { previewBusy.value = false }
+}
 async function loadSaved(){
   try { saved.value = await $fetch<any[]>('/api/ads-research/ads?limit=200') }
   catch(e:any) { error.value = e?.data?.detail || 'Could not load saved ads.' }
@@ -36,6 +45,7 @@ async function search(){
     }})
     results.value=r.results||[]
     selected.value=results.value[0]||null
+    if (selected.value) loadPreviewMedia(selected.value)
     notice.value=r.message || 'Meta Ad Library API search completed.'
     await loadSaved()
   } catch(e:any){
@@ -45,6 +55,7 @@ async function search(){
 }
 function selectResult(ad:any){
   selected.value=ad; landingUrl.value=ad.landing_page_url||''; analysis.value=null
+  loadPreviewMedia(ad)
 }
 async function saveCurrent(){
   if(!selected.value?.ad_text?.trim())return
@@ -130,10 +141,13 @@ onMounted(()=>{
       <aside class="preview-column">
         <section class="panel preview-panel" v-if="selected">
           <div class="section-head"><div><h2>Creative preview</h2><p>{{selected.page_name||'Advertiser'}} · {{selected.country}} · {{selected.ad_archive_id||'Saved note'}}</p></div><span class="preview-badge">LIVE PREVIEW</span></div>
-          <div v-if="previewSrc" class="creative-frame">
-            <iframe :src="previewSrc" title="Meta Ad Library creative preview" loading="lazy" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer"></iframe>
+          <div v-if="previewBusy" class="no-preview"><b>Loading creative media…</b></div>
+          <div v-else-if="previewMedia && (previewMedia.images?.length || previewMedia.videos?.length)" class="media-preview">
+            <img v-if="previewMedia.images?.length" :src="previewMedia.images[0]" alt="Meta ad creative image" loading="lazy">
+            <video v-for="(video,index) in previewMedia.videos" :key="index" :src="video" :poster="previewMedia.poster||undefined" controls playsinline preload="metadata"></video>
+            <p v-if="previewMedia.images.length>1" class="media-note">{{previewMedia.images.length}} image URLs found · showing first image</p>
           </div>
-          <div v-else class="no-preview"><div class="no-preview-icon">▧</div><b>Visual preview unavailable</b><p>This record does not include a Meta snapshot. Open the original source to inspect it.</p></div>
+          <div v-else class="no-preview"><div class="no-preview-icon">▧</div><b>Visual preview unavailable</b><p>{{previewMedia?.message || 'This record does not expose direct media URLs.'}} Open the original source to inspect it.</p></div>
           <div class="creative-actions">
             <a v-if="selected.ad_library_url" :href="selected.ad_library_url" target="_blank" rel="noopener">Open original in Meta ↗</a>
             <button v-if="selected.id" class="secondary" :disabled="analyzeBusy===selected.id" @click="analyze(selected.id)">{{analyzeBusy===selected.id?'Analyzing…':'AI analyze'}}</button>
@@ -188,8 +202,9 @@ button{border:0;border-radius:8px;padding:10px 14px;background:#21b9a6;color:#04
 .ad-item:hover,.ad-item.active{background:#172c40}.ad-item.active{box-shadow:inset 3px 0 #3bd0bb}
 .ad-item-top{display:flex;justify-content:space-between;align-items:center;gap:8px}.ad-item-top b{font-size:11px}.mini-tag{font-size:9px;color:#77d8c9;border:1px solid #315b62;border-radius:12px;padding:3px 7px}
 .ad-title,.ad-snippet,.ad-meta{display:block}.ad-title{font-size:11px;color:#c8d9e8;margin-top:7px;font-weight:650}.ad-snippet{font-size:10px;color:#8ea4ba;line-height:1.45;margin-top:5px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-line}.ad-meta{font-size:9px;color:#68839b;margin-top:7px}
-.preview-column{position:sticky;top:12px}.preview-panel{padding:16px}.preview-badge{font-size:8px}.creative-frame{width:100%;height:min(68vh,720px);min-height:390px;background:#07111c;border:1px solid #263d53;border-radius:10px;overflow:hidden}
-.creative-frame iframe{width:100%;height:100%;border:0;background:#fff}
+.preview-column{position:sticky;top:12px}.preview-panel{padding:16px}.preview-badge{font-size:8px}.media-preview{display:grid;gap:10px;place-items:center;width:100%;min-height:260px;max-height:720px;overflow:auto;background:#07111c;border:1px solid #263d53;border-radius:10px;padding:10px;box-sizing:border-box}
+.media-preview img,.media-preview video{display:block;max-width:100%;max-height:660px;object-fit:contain;border-radius:6px}
+.media-preview video{width:100%}.media-note{font-size:10px;color:#829ab0;margin:0}
 .creative-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #253a4f}
 .creative-actions a{color:#6fe1d0;font-size:11px;text-decoration:none}.copy-block{padding:12px 0 4px}.copy-label{font-size:9px;letter-spacing:.12em;color:#70d9c9;font-weight:750;margin-top:8px}.copy-block p{font-size:11px;color:#c3d3e2;line-height:1.55;white-space:pre-wrap;margin:5px 0 10px}
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;border-top:1px solid #253a4f;padding:12px 0}
