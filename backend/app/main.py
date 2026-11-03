@@ -36,6 +36,8 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE facebook_ad_research ADD COLUMN beneficiary_payers TEXT DEFAULT '[]'"))
     if 'targeting_details' not in _ads_columns:
         conn.execute(text("ALTER TABLE facebook_ad_research ADD COLUMN targeting_details TEXT DEFAULT '{}'"))
+    if 'media_json' not in _ads_columns:
+        conn.execute(text("ALTER TABLE facebook_ad_research ADD COLUMN media_json TEXT DEFAULT ''"))
 
 def log_activity(db: Session, event_type: str, message: str, status: str = "success", details: dict | None = None):
     db.add(ActivityLog(event_type=event_type, message=message, status=status, details=json.dumps(details or {}, ensure_ascii=False)))
