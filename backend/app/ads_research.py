@@ -360,7 +360,9 @@ def preview_ad(ad_id: int, db: Session = Depends(get_db)):
             # Set the document base to the validated Facebook origin so all
             # relative resources and follow-up requests go to Meta directly.
             from html import escape
-            base_url = f"{parts.scheme}://{parts.netloc}/"
+            final_parts = urlsplit(upstream.geturl())
+            safe_base_query = [(k, v) for k, v in parse_qsl(final_parts.query, keep_blank_values=True) if k != "access_token"]
+            base_url = urlunsplit((final_parts.scheme, final_parts.netloc, final_parts.path, urlencode(safe_base_query), ""))
             base_tag = f'<base href="{escape(base_url, quote=True)}">'
             head_match = re.search(r"<head\b[^>]*>", html, flags=re.IGNORECASE)
             if head_match:
