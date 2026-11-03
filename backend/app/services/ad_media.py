@@ -12,7 +12,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Sa
 
 def redact(value: object) -> str:
     """Redact Meta access tokens from all ad-media diagnostics."""
-    return re.sub(r"(?i)(access_token\\s*=\\s*)[^&\\s\"'<>]+", r"\\1***", str(value))
+    return re.sub(r"(?i)(access_token\s*=\s*)[^&\s\"'<>]+", r"\1***", str(value))
 
 
 class SnapshotHTTPError(Exception):
@@ -75,14 +75,14 @@ def extract_media(html: str) -> dict:
     import html as html_lib
 
     normalized = html_lib.unescape(html)
-    normalized = normalized.replace(r"\\/", "/").replace(r"\\u0026", "&")
+    normalized = normalized.replace(r"\/", "/").replace(r"\u0026", "&")
     images: list[str] = []
     videos: list[str] = []
     posters: list[str] = []
 
     # Scan every absolute URL; only accept Meta CDN URLs and known media extensions.
-    for match in re.finditer(r"""https://[^\\s"'<>\\\\]+""", normalized, re.I):
-        candidate = match.group(0).rstrip("),;]}\\\\")
+    for match in re.finditer(r"""https://[^\s"'<>\\]+""", normalized, re.I):
+        candidate = match.group(0).rstrip("),;]}\\")
         safe = _safe_meta_url(candidate)
         if not safe:
             continue
