@@ -2,11 +2,24 @@
 import asyncio
 import json
 import re
+import html as html_lib
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
+
+
+def redact(value: object) -> str:
+    """Redact Meta access tokens from all ad-media diagnostics."""
+    return re.sub(r"(?i)(access_token\\s*=\\s*)[^&\\s\"'<>]+", r"\\1***", str(value))
+
+
+class SnapshotHTTPError(Exception):
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        self.body = redact(body[:300])
+        super().__init__(f"Meta snapshot returned HTTP {status_code}: {self.body}")
 
 
 def _safe_meta_url(value: str) -> str | None:
@@ -37,16 +50,23 @@ def _pick(html: str, key: str) -> list[str]:
 
 
 async def fetch_snapshot_html(snapshot_url: str, token: str) -> str:
-    parts = urlsplit(snapshot_url)
+    normalized = html_lib.unescape(snapshot_url)
+    parts = urlsplit(normalized)
     host = (parts.hostname or "").lower()
     if parts.scheme != "https" or host not in {"facebook.com", "www.facebook.com"}:
         raise ValueError("Invalid Meta snapshot URL")
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "access_token"]
     query.append(("access_token", token))
     url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info("ad-media normalized snapshot URL=%s has_id=%s", redact(url), any(k == "id" and v for k, v in parse_qsl(urlsplit(url).query, keep_blank_values=True)))
     async with httpx.AsyncClient(follow_redirects=True, timeout=25, headers={"User-Agent": UA, "Accept": "text/html"}) as client:
         response = await client.get(url)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            body = redact(response.text[:300])
+            logger.warning("ad-media snapshot HTTP %s body=%s", response.status_code, body)
+            raise SnapshotHTTPError(response.status_code, body)
         return response.text[:8_000_000]
 
 
