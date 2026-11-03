@@ -144,7 +144,7 @@ onMounted(()=>{
           <div v-if="previewBusy" class="no-preview"><b>Loading creative media…</b></div>
           <div v-else-if="previewMedia && (previewMedia.images?.length || previewMedia.videos?.length)" class="media-preview">
             <img v-if="previewMedia.images?.length" :src="previewMedia.images[0]" alt="Meta ad creative image" loading="lazy">
-            <video v-for="(video,index) in previewMedia.videos" :key="index" :src="video" :poster="previewMedia.poster||undefined" controls playsinline preload="metadata"></video>
+            <video v-for="(video,index) in previewMedia.videos" :key="index" :src="video" :poster="previewMedia.poster||previewMedia.posters?.[0]||undefined" controls playsinline preload="metadata"></video>
             <p v-if="previewMedia.images.length>1" class="media-note">{{previewMedia.images.length}} image URLs found · showing first image</p>
           </div>
           <div v-else class="no-preview"><div class="no-preview-icon">▧</div><b>Visual preview unavailable</b><p>{{previewMedia?.message || 'This record does not expose direct media URLs.'}} Open the original source to inspect it.</p></div>
