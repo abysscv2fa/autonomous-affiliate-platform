@@ -410,12 +410,32 @@ def _extract_snapshot_media(html: str) -> dict:
                         found[target].append(safe_url)
     poster_match = re.search(r"""<meta[^>]+(?:property|name)=["']og:image["'][^>]+content=["']([^"']+)""", html, re.I)
     if poster_match:
-        value = poster_match.group(1).replace("&amp;", "&")
+        value = poster_match.group(1).replace("&amp;", "&").replace(r"\\/", "/").replace(r"\\u0026", "&")
         parts = urlsplit(value)
         if parts.scheme == "https" and ((parts.hostname or "").lower().endswith(".fbcdn.net")):
             found["poster"] = value
             if value not in found["images"]:
                 found["images"].insert(0, value)
+
+    # Meta frequently changes the JSON field names in snapshot markup.
+    # As a fallback, scan all embedded URLs but accept only Meta CDN hosts.
+    normalized_html = html.replace(r"\\/", "/").replace(r"\\u0026", "&").replace("&amp;", "&")
+    for match in re.finditer(r"""https://[^\\s"'<>\\\\]+""", normalized_html):
+        value = match.group(0).rstrip("),;")
+        parts = urlsplit(value)
+        host = (parts.hostname or "").lower()
+        if not host.endswith(".fbcdn.net"):
+            continue
+        clean_query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "access_token"]
+        safe_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(clean_query), ""))
+        lower_host = host.lower()
+        if ("video" in lower_host or re.search(r"\\.(mp4|m3u8)(?:$|[?])", safe_url, re.I)):
+            if safe_url not in found["videos"]:
+                found["videos"].append(safe_url)
+        elif safe_url not in found["images"]:
+            found["images"].append(safe_url)
+    found["images"] = found["images"][:10]
+    found["videos"] = found["videos"][:1]
     return found
 
 
