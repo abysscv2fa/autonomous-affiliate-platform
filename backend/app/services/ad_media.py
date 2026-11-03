@@ -16,9 +16,15 @@ def redact(value: object) -> str:
 
 
 class SnapshotHTTPError(Exception):
-    def __init__(self, status_code: int, body: str):
+    def __init__(self, status_code: int, body: str, content_type: str = ""):
         self.status_code = status_code
-        self.body = redact(body[:300])
+        self.content_type = content_type[:120]
+        # Keep a useful, sanitized diagnostic excerpt; Meta often puts the
+        # actual rejection reason after the generic HTML page title.
+        plain = re.sub(r"<(script|style)\\b[^>]*>.*?</\\1>", " ", body, flags=re.I | re.S)
+        plain = re.sub(r"<[^>]+>", " ", plain)
+        plain = html_lib.unescape(re.sub(r"\\s+", " ", plain)).strip()
+        self.body = redact(plain[:1800])
         super().__init__(f"Meta snapshot returned HTTP {status_code}: {self.body}")
 
 
@@ -64,9 +70,15 @@ async def fetch_snapshot_html(snapshot_url: str, token: str) -> str:
     async with httpx.AsyncClient(follow_redirects=True, timeout=25, headers={"User-Agent": UA, "Accept": "text/html"}) as client:
         response = await client.get(url)
         if response.status_code >= 400:
-            body = redact(response.text[:300])
-            logger.warning("ad-media snapshot HTTP %s body=%s", response.status_code, body)
-            raise SnapshotHTTPError(response.status_code, body)
+            body = response.text[:12000]
+            safe_url = redact(str(response.url))
+            content_type = response.headers.get("content-type", "")
+            logger.warning(
+                "ad-media snapshot rejected status=%s content_type=%s final_url=%s body_excerpt=%s",
+                response.status_code, content_type[:120], safe_url,
+                SnapshotHTTPError(response.status_code, body, content_type).body,
+            )
+            raise SnapshotHTTPError(response.status_code, body, content_type)
         return response.text[:8_000_000]
 
 
