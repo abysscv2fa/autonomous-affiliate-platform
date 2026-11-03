@@ -362,7 +362,7 @@ def preview_ad(ad_id: int, db: Session = Depends(get_db)):
             from html import escape
             base_url = f"{parts.scheme}://{parts.netloc}/"
             base_tag = f'<base href="{escape(base_url, quote=True)}">'
-            head_match = re.search(r"<head\\b[^>]*>", html, flags=re.IGNORECASE)
+            head_match = re.search(r"<head\b[^>]*>", html, flags=re.IGNORECASE)
             if head_match:
                 html = html[:head_match.end()] + base_tag + html[head_match.end():]
             else:
