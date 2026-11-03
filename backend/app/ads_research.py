@@ -381,6 +381,72 @@ def preview_ad(ad_id: int, db: Session = Depends(get_db)):
         raise HTTPException(502, f"Could not load Meta snapshot: {str(exc)[:200]}")
 
 
+
+def _extract_snapshot_media(html: str) -> dict:
+    """Best-effort extraction of public creative media URLs from Meta's snapshot HTML."""
+    found = {"images": [], "videos": [], "poster": ""}
+    patterns = {
+        "images": ("original_image_url", "resized_image_url", "image_url"),
+        "videos": ("video_hd_url", "video_sd_url"),
+    }
+    for target, keys in patterns.items():
+        for key in keys:
+            pattern = r'["\\']' + re.escape(key) + r'["\\']\\s*:\\s*["\\']((?:\\\\.|[^"\\\\])*)["\\']'
+            for match in re.finditer(pattern, html):
+                raw = match.group(1)
+                try:
+                    value = json.loads('"' + raw.replace('"', '\\"') + '"')
+                except (ValueError, TypeError):
+                    value = raw.replace("\\/", "/").replace("\\u0026", "&")
+                parts = urlsplit(value)
+                host = (parts.hostname or "").lower()
+                if parts.scheme == "https" and (host.endswith(".fbcdn.net") or host.endswith(".facebook.com")):
+                    clean_query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "access_token"]
+                    safe_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(clean_query), ""))
+                    if safe_url not in found[target]:
+                        found[target].append(safe_url)
+    poster_match = re.search(r'<meta[^>]+(?:property|name)=["\\']og:image["\\'][^>]+content=["\\']([^"\\']+)', html, re.I)
+    if poster_match:
+        value = poster_match.group(1).replace("&amp;", "&")
+        parts = urlsplit(value)
+        if parts.scheme == "https" and ((parts.hostname or "").lower().endswith(".fbcdn.net")):
+            found["poster"] = value
+            if value not in found["images"]:
+                found["images"].insert(0, value)
+    return found
+
+
+@router.get("/ads/{ad_id}/media")
+def preview_ad_media(ad_id: int, db: Session = Depends(get_db)):
+    """Return extracted creative media URLs; Meta token remains server-side."""
+    item = db.get(FacebookAdResearch, ad_id)
+    if not item or not item.creative_url:
+        raise HTTPException(404, "Meta ad snapshot is not available for this record")
+    token = (settings.meta_ad_library_access_token or "").strip()
+    if not token:
+        raise HTTPException(503, "Meta Ad Library API is not connected")
+    parts = urlsplit(item.creative_url)
+    if parts.scheme != "https" or not ((parts.hostname or "") == "facebook.com" or (parts.hostname or "").endswith(".facebook.com")):
+        raise HTTPException(400, "Invalid Meta snapshot URL")
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
+    query.append(("access_token", token))
+    snapshot_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+    request = UrlRequest(snapshot_url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0 AffPilot-AdSpy/1.0"})
+    try:
+        with urlopen(request, timeout=25) as upstream:
+            html = upstream.read(8_000_000).decode("utf-8", "replace")
+    except HTTPError as exc:
+        raise HTTPException(502, f"Meta snapshot returned HTTP {exc.code}")
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(502, f"Could not load Meta snapshot: {str(exc)[:200]}")
+    media = _extract_snapshot_media(html)
+    media["ad_library_url"] = item.ad_library_url
+    media["source"] = "meta_snapshot_html"
+    media["message"] = ("Media links extracted from Meta snapshot." if media["images"] or media["videos"]
+                        else "Meta snapshot HTML did not expose direct media URLs; use Open original in Meta.")
+    return media
+
+
 @router.post("/ads/{ad_id}/analyze")
 def analyze_ad(ad_id: int, db: Session = Depends(get_db)):
     item = db.get(FacebookAdResearch, ad_id)
