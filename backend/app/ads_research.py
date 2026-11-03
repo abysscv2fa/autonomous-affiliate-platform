@@ -353,7 +353,22 @@ def preview_ad(ad_id: int, db: Session = Depends(get_db)):
     request = UrlRequest(snapshot_url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0 AffPilot-AdSpy/1.0"})
     try:
         with urlopen(request, timeout=25) as upstream:
-            html = upstream.read(8_000_000)
+            html = upstream.read(8_000_000).decode("utf-8", "replace")
+            # Meta's snapshot HTML uses root-relative asset and AJAX URLs. Since
+            # this document is served from our backend proxy, browsers would
+            # otherwise send those requests back to AffPilot (causing 401/404).
+            # Set the document base to the validated Facebook origin so all
+            # relative resources and follow-up requests go to Meta directly.
+            from html import escape
+            base_url = f"{parts.scheme}://{parts.netloc}/"
+            base_tag = f'<base href="{escape(base_url, quote=True)}">'
+            head_match = re.search(r"<head\\b[^>]*>", html, flags=re.IGNORECASE)
+            if head_match:
+                html = html[:head_match.end()] + base_tag + html[head_match.end():]
+            else:
+                html = base_tag + html
+            # Never reflect the server-side bearer token into the browser HTML.
+            html = html.replace(token, "")
             return Response(
                 content=html, media_type="text/html",
                 headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
