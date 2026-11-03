@@ -51,31 +51,43 @@ async def fetch_snapshot_html(snapshot_url: str, token: str) -> str:
 
 
 def extract_media(html: str) -> dict:
-    images = _pick(html, "original_image_url") or _pick(html, "resized_image_url") or _pick(html, "image_url")
-    videos = _pick(html, "video_hd_url") or _pick(html, "video_sd_url")
-    posters = _pick(html, "video_preview_image_url")
-    if not posters:
-        match = re.search(r"""<meta[^>]+(?:property|name)=["']og:image["'][^>]+content=["']([^"']+)""", html, re.I)
-        if match:
-            safe = _safe_meta_url(match.group(1).replace("&amp;", "&"))
-            if safe:
-                posters.append(safe)
-                if not images:
-                    images.append(safe)
+    """Extract CDN media by URL extension, independent of Meta JSON key names."""
+    import html as html_lib
 
-    # Fallback: Meta sometimes changes embedded JSON field names.
-    normalized = html.replace(r"\/", "/").replace(r"\u0026", "&").replace("&amp;", "&")
-    for match in re.finditer(r"""https://[^\s"'<>]+""", normalized):
-        safe = _safe_meta_url(match.group(0).rstrip("),;"))
+    normalized = html_lib.unescape(html)
+    normalized = normalized.replace(r"\\/", "/").replace(r"\\u0026", "&")
+    images: list[str] = []
+    videos: list[str] = []
+    posters: list[str] = []
+
+    # Scan every absolute URL; only accept Meta CDN URLs and known media extensions.
+    for match in re.finditer(r"""https://[^\\s"'<>\\\\]+""", normalized, re.I):
+        candidate = match.group(0).rstrip("),;]}\\\\")
+        safe = _safe_meta_url(candidate)
         if not safe:
             continue
-        if re.search(r"""\.(?:mp4|m3u8)(?:$|[?])""", safe, re.I):
+        path = urlsplit(safe).path.lower()
+        if path.endswith(".mp4"):
             if safe not in videos:
                 videos.append(safe)
-        elif safe not in images:
-            images.append(safe)
-    return {"images": images[:10], "videos": videos[:1], "posters": posters[:1]}
+        elif path.endswith((".jpg", ".jpeg", ".png", ".webp")):
+            if safe not in images:
+                images.append(safe)
 
+    # Keep a poster image when Meta's snapshot exposes og:image.
+    poster_match = re.search(
+        r"""<meta[^>]+(?:property|name)=["']og:image["'][^>]+content=["']([^"']+)""",
+        normalized,
+        re.I,
+    )
+    if poster_match:
+        poster = _safe_meta_url(poster_match.group(1))
+        if poster and urlsplit(poster).path.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            posters.append(poster)
+            if poster not in images:
+                images.insert(0, poster)
+
+    return {"images": images[:10], "videos": videos[:1], "posters": posters[:1]}
 
 def _upload_remote(url: str, public_id: str, resource_type: str, cloud_name: str, api_key: str, api_secret: str) -> str:
     import cloudinary
