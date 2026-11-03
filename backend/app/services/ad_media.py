@@ -11,7 +11,7 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Sa
 
 def _safe_meta_url(value: str) -> str | None:
     try:
-        value = value.replace("\\/", "/").replace("\\u0026", "&")
+        value = value.replace(r"\/", "/").replace(r"\u0026", "&")
         parts = urlsplit(value)
         host = (parts.hostname or "").lower()
         if parts.scheme != "https" or not (host.endswith(".fbcdn.net") or host.endswith(".facebook.com")):
@@ -24,7 +24,7 @@ def _safe_meta_url(value: str) -> str | None:
 
 def _pick(html: str, key: str) -> list[str]:
     values = []
-    pattern = re.compile(r'"' + re.escape(key) + r'"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"')
+    pattern = re.compile(r'"' + re.escape(key) + r'"\s*:\s*"((?:\\.|[^"\\])*)"')
     for match in pattern.finditer(html):
         try:
             raw_value = json.loads('"' + match.group(1) + '"')
@@ -64,7 +64,7 @@ def extract_media(html: str) -> dict:
                     images.append(safe)
 
     # Fallback: Meta sometimes changes embedded JSON field names.
-    normalized = html.replace("\\/", "/").replace("\\u0026", "&").replace("&amp;", "&")
+    normalized = html.replace(r"\/", "/").replace(r"\u0026", "&").replace("&amp;", "&")
     for match in re.finditer(r"""https://[^\s"'<>]+""", normalized):
         safe = _safe_meta_url(match.group(0).rstrip("),;"))
         if not safe:
