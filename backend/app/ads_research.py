@@ -1,6 +1,7 @@
 import json
 import re
 import asyncio
+import logging
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column, Session
 from .db import Base, get_db
 from .config import settings
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ads-research", tags=["Meta Ad Library Research"])
 
 EU_COUNTRIES = [
