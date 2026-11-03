@@ -11,7 +11,8 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Sa
 
 def _safe_meta_url(value: str) -> str | None:
     try:
-        parts = urlsplit(value.replace("\\/", "/").replace("\\u0026", "&"))
+        value = value.replace("\\/", "/").replace("\\u0026", "&")
+        parts = urlsplit(value)
         host = (parts.hostname or "").lower()
         if parts.scheme != "https" or not (host.endswith(".fbcdn.net") or host.endswith(".facebook.com")):
             return None
@@ -22,22 +23,23 @@ def _safe_meta_url(value: str) -> str | None:
 
 
 def _pick(html: str, key: str) -> list[str]:
-    out = []
+    values = []
     pattern = re.compile(r'"' + re.escape(key) + r'"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"')
     for match in pattern.finditer(html):
         try:
-            value = json.loads('"' + match.group(1) + '"')
+            raw_value = json.loads('"' + match.group(1) + '"')
         except (ValueError, TypeError):
             continue
-        safe = _safe_meta_url(value) if isinstance(value, str) else None
-        if safe and safe not in out:
-            out.append(safe)
-    return out
+        safe = _safe_meta_url(raw_value) if isinstance(raw_value, str) else None
+        if safe and safe not in values:
+            values.append(safe)
+    return values
 
 
 async def fetch_snapshot_html(snapshot_url: str, token: str) -> str:
     parts = urlsplit(snapshot_url)
-    if parts.scheme != "https" or (parts.hostname or "").lower() not in {"facebook.com", "www.facebook.com"}:
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or host not in {"facebook.com", "www.facebook.com"}:
         raise ValueError("Invalid Meta snapshot URL")
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "access_token"]
     query.append(("access_token", token))
@@ -53,21 +55,21 @@ def extract_media(html: str) -> dict:
     videos = _pick(html, "video_hd_url") or _pick(html, "video_sd_url")
     posters = _pick(html, "video_preview_image_url")
     if not posters:
-        match = re.search(r'<meta[^>]+(?:property|name)=["\\']og:image["\\'][^>]+content=["\\']([^"\\']+)', html, re.I)
+        match = re.search(r"""<meta[^>]+(?:property|name)=["']og:image["'][^>]+content=["']([^"']+)""", html, re.I)
         if match:
-            value = match.group(1).replace("&amp;", "&")
-            safe = _safe_meta_url(value)
+            safe = _safe_meta_url(match.group(1).replace("&amp;", "&"))
             if safe:
                 posters.append(safe)
                 if not images:
                     images.append(safe)
-    # Fallback for Meta snapshot variants with changed JSON property names.
+
+    # Fallback: Meta sometimes changes embedded JSON field names.
     normalized = html.replace("\\/", "/").replace("\\u0026", "&").replace("&amp;", "&")
-    for match in re.finditer(r'https://[^\\s"\\'<>]+', normalized):
+    for match in re.finditer(r"""https://[^\s"'<>]+""", normalized):
         safe = _safe_meta_url(match.group(0).rstrip("),;"))
         if not safe:
             continue
-        if re.search(r'\\.(?:mp4|m3u8)(?:$|[?])', safe, re.I):
+        if re.search(r"""\.(?:mp4|m3u8)(?:$|[?])""", safe, re.I):
             if safe not in videos:
                 videos.append(safe)
         elif safe not in images:
@@ -84,21 +86,20 @@ def _upload_remote(url: str, public_id: str, resource_type: str, cloud_name: str
 
 
 async def persist_to_cloudinary(ad_id: str, media: dict, cloud_name: str, api_key: str, api_secret: str, with_video: bool = True) -> dict:
-    out = {"images": [], "videos": [], "posters": []}
+    result = {"images": [], "videos": [], "posters": []}
     safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(ad_id))[:100]
     jobs = []
-    for i, url in enumerate(media.get("images", [])[:10]):
-        jobs.append(("images", url, f"ad_{safe_id}_img_{i}", "image"))
-    for i, url in enumerate(media.get("posters", [])[:1]):
-        jobs.append(("posters", url, f"ad_{safe_id}_poster_{i}", "image"))
+    for index, url in enumerate(media.get("images", [])[:10]):
+        jobs.append(("images", url, f"ad_{safe_id}_img_{index}", "image"))
+    for index, url in enumerate(media.get("posters", [])[:1]):
+        jobs.append(("posters", url, f"ad_{safe_id}_poster_{index}", "image"))
     if with_video:
-        for i, url in enumerate(media.get("videos", [])[:1]):
-            jobs.append(("videos", url, f"ad_{safe_id}_vid_{i}", "video"))
+        for index, url in enumerate(media.get("videos", [])[:1]):
+            jobs.append(("videos", url, f"ad_{safe_id}_vid_{index}", "video"))
     for field, url, public_id, kind in jobs:
         try:
-            saved = await asyncio.to_thread(_upload_remote, url, public_id, kind, cloud_name, api_key, api_secret)
-            out[field].append(saved)
+            uploaded = await asyncio.to_thread(_upload_remote, url, public_id, kind, cloud_name, api_key, api_secret)
+            result[field].append(uploaded)
         except Exception:
-            # A single failed asset must not prevent other media or fallback.
             continue
-    return out
+    return result
