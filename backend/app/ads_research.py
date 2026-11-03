@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request as UrlRequest, urlopen
 import httpx
+from .services.ad_media import fetch_snapshot_html, extract_media, persist_to_cloudinary
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -439,35 +440,58 @@ def _extract_snapshot_media(html: str) -> dict:
     return found
 
 
+_media_locks: dict[int, asyncio.Lock] = {}
+
+
 @router.get("/ads/{ad_id}/media")
-def preview_ad_media(ad_id: int, db: Session = Depends(get_db)):
-    """Return extracted creative media URLs; Meta token remains server-side."""
+async def preview_ad_media(ad_id: int, db: Session = Depends(get_db)):
+    """Lazy-load one ad creative and cache Cloudinary URLs; never expose the Meta token."""
     item = db.get(FacebookAdResearch, ad_id)
-    if not item or not item.creative_url:
-        raise HTTPException(404, "Meta ad snapshot is not available for this record")
-    token = (settings.meta_ad_library_access_token or "").strip()
-    if not token:
-        raise HTTPException(503, "Meta Ad Library API is not connected")
-    parts = urlsplit(item.creative_url)
-    if parts.scheme != "https" or not ((parts.hostname or "") == "facebook.com" or (parts.hostname or "").endswith(".facebook.com")):
-        raise HTTPException(400, "Invalid Meta snapshot URL")
-    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != "access_token"]
-    query.append(("access_token", token))
-    snapshot_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
-    request = UrlRequest(snapshot_url, headers={"Accept": "text/html", "User-Agent": "Mozilla/5.0 AffPilot-AdSpy/1.0"})
-    try:
-        with urlopen(request, timeout=25) as upstream:
-            html = upstream.read(8_000_000).decode("utf-8", "replace")
-    except HTTPError as exc:
-        raise HTTPException(502, f"Meta snapshot returned HTTP {exc.code}")
-    except (URLError, TimeoutError) as exc:
-        raise HTTPException(502, f"Could not load Meta snapshot: {str(exc)[:200]}")
-    media = _extract_snapshot_media(html)
-    media["ad_library_url"] = item.ad_library_url
-    media["source"] = "meta_snapshot_html"
-    media["message"] = ("Media links extracted from Meta snapshot." if media["images"] or media["videos"]
-                        else "Meta snapshot HTML did not expose direct media URLs; use Open original in Meta.")
-    return media
+    if not item:
+        raise HTTPException(404, "Ad research record not found")
+    original_url = f"https://www.facebook.com/ads/library/?id={item.ad_archive_id}" if item.ad_archive_id else item.ad_library_url
+
+    cached = _json(item.media_json, {})
+    if cached and any(cached.get(k) for k in ("images", "videos", "posters")):
+        return {"status": "cached", **cached, "original_url": original_url}
+
+    lock = _media_locks.setdefault(ad_id, asyncio.Lock())
+    async with lock:
+        db.refresh(item)
+        cached = _json(item.media_json, {})
+        if cached and any(cached.get(k) for k in ("images", "videos", "posters")):
+            return {"status": "cached", **cached, "original_url": original_url}
+
+        token = (settings.meta_ad_library_access_token or "").strip()
+        if not token or not item.creative_url:
+            return {"status": "fallback", "images": [], "videos": [], "posters": [],
+                    "original_url": original_url, "message": "Meta snapshot or access token is unavailable."}
+        try:
+            html = await fetch_snapshot_html(item.creative_url, token)
+            media = extract_media(html)
+            if not any(media.values()):
+                logger.warning("ad-media: no media keys for ad_id=%s; snapshot_head=%r", ad_id, html[:2000])
+                return {"status": "fallback", "images": [], "videos": [], "posters": [],
+                        "original_url": original_url, "message": "Meta snapshot HTML did not expose media URLs."}
+
+            if settings.cloudinary_cloud_name and settings.cloudinary_api_key and settings.cloudinary_api_secret:
+                saved = await persist_to_cloudinary(
+                    str(item.ad_archive_id or item.id), media,
+                    settings.cloudinary_cloud_name, settings.cloudinary_api_key,
+                    settings.cloudinary_api_secret, with_video=True,
+                )
+                if any(saved.values()):
+                    item.media_json = json.dumps(saved, ensure_ascii=False)
+                    db.commit()
+                    return {"status": "ok", **saved, "original_url": original_url}
+
+            # Show temporary Meta CDN URLs if Cloudinary is not configured or upload failed.
+            return {"status": "direct", **media, "original_url": original_url,
+                    "message": "Showing temporary Meta CDN URLs; Cloudinary cache is not configured or upload failed."}
+        except Exception as exc:
+            logger.warning("ad-media failed id=%s: %s", ad_id, str(exc)[:300])
+            return {"status": "fallback", "images": [], "videos": [], "posters": [],
+                    "original_url": original_url, "message": "Could not retrieve creative media from Meta."}
 
 
 @router.post("/ads/{ad_id}/analyze")
