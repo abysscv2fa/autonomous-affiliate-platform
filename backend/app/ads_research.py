@@ -1,10 +1,12 @@
 import json
 import re
+import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request as UrlRequest, urlopen
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -54,6 +56,7 @@ class FacebookAdResearch(Base):
     beneficiary_payers: Mapped[str] = mapped_column(Text, default="[]")
     targeting_details: Mapped[str] = mapped_column(Text, default="{}")
     ai_analysis: Mapped[str] = mapped_column(Text, default="")
+    media_json: Mapped[str] = mapped_column(Text, default="")
     opportunity_score: Mapped[int] = mapped_column(Integer, default=0)
     evidence_label: Mapped[str] = mapped_column(String(60), default="meta_api")
     created_at: Mapped[datetime] = mapped_column(
