@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 from urllib.request import Request as UrlRequest, urlopen
 import httpx
-from .services.ad_media import fetch_snapshot_html, extract_media, persist_to_cloudinary
+from .services.ad_media import fetch_snapshot_html, extract_media, persist_to_cloudinary, redact, SnapshotHTTPError
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -472,7 +472,7 @@ async def preview_ad_media(ad_id: int, db: Session = Depends(get_db)):
             html = await fetch_snapshot_html(item.creative_url, token)
             media = extract_media(html)
             if not any(media.values()):
-                logger.warning("ad-media: no media keys for ad_id=%s; snapshot_head=%r", ad_id, html[:2000])
+                logger.warning("ad-media: no media found ad_id=%s snapshot_head=%s", ad_id, redact(html[:2000]))
                 return {"status": "fallback", "images": [], "videos": [], "posters": [],
                         "original_url": original_url, "message": "Meta snapshot HTML did not expose media URLs."}
 
@@ -490,10 +490,18 @@ async def preview_ad_media(ad_id: int, db: Session = Depends(get_db)):
             # Show temporary Meta CDN URLs if Cloudinary is not configured or upload failed.
             return {"status": "direct", **media, "original_url": original_url,
                     "message": "Showing temporary Meta CDN URLs; Cloudinary cache is not configured or upload failed."}
-        except Exception as exc:
-            logger.warning("ad-media failed id=%s: %s", ad_id, str(exc)[:300])
+        except SnapshotHTTPError as exc:
+            logger.warning("ad-media failed id=%s HTTP %s body=%s", ad_id, exc.status_code, redact(exc.body))
             return {"status": "fallback", "images": [], "videos": [], "posters": [],
-                    "original_url": original_url, "message": "Could not retrieve creative media from Meta."}
+                    "original_url": original_url, "meta_http_code": exc.status_code,
+                    "meta_error_body": redact(exc.body),
+                    "message": "Meta rejected the snapshot request."}
+        except Exception as exc:
+            logger.warning("ad-media failed id=%s error_type=%s", ad_id, type(exc).__name__)
+            return {"status": "fallback", "images": [], "videos": [], "posters": [],
+                    "original_url": original_url, "meta_http_code": None,
+                    "meta_error_body": redact(str(exc)[:300]),
+                    "message": "Could not retrieve creative media from Meta."}
 
 
 @router.post("/ads/{ad_id}/analyze")
